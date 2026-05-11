@@ -1,0 +1,49 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyd
+*.pyo
+*.so
+
+# Virtual environment
+.venv/
+venv/
+
+# IDE / editor
+.vscode/
+.idea/
+*.code-workspace
+
+# Local runtime data
+config.json
+nexus.db
+nexus.db-shm
+nexus.db-wal
+user_data/
+cache/
+logs/
+
+# Build output
+build/
+dist/
+dist-installer/
+*.spec.bak
+
+# OS files
+Thumbs.db
+.DS_Store
+
+# Local secrets and env files
+.env
+.env.*
+
+# Test and coverage
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Portable Git binaries
+vendor/PortableGit/
+!vendor/README.md
