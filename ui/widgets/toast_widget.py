@@ -1,15 +1,15 @@
 """
 Widget de notificação toast — aparece no canto superior direito e desaparece.
 """
+
 from PySide6.QtWidgets import QWidget, QLabel, QHBoxLayout, QGraphicsOpacityEffect
-from PySide6.QtCore import Qt, QTimer, QPropertyAnimation, QPoint
-from PySide6.QtGui import QColor
+from PySide6.QtCore import Qt, QTimer, QPropertyAnimation
 
 
 _COLORS = {
-    "info": ("#1a1a2e", "#5b8def"),
+    "info": ("#0d1a2e", "#1EA1FF"),
     "success": ("#0d2818", "#4ade80"),
-    "warning": ("#2d2206", "#facc15"),
+    "warning": ("#2d1506", "#FB923C"),
     "error": ("#2d0a0a", "#f87171"),
 }
 
@@ -44,16 +44,18 @@ class ToastWidget(QWidget):
         self.hide()
 
     def show_toast(self, message: str, level: str = "info"):
-        bg, border = _COLORS.get(level, _COLORS["info"])
+        bg, accent = _COLORS.get(level, _COLORS["info"])
         self.setStyleSheet(f"""
             QWidget {{
                 background-color: {bg};
-                border: 1px solid {border};
+                border: 1px solid {accent};
                 border-radius: 8px;
             }}
         """)
         self._label.setText(message)
-        self._label.setStyleSheet(f"font-size: 13px; font-weight: 600; color: {border}; background: transparent;")
+        self._label.setStyleSheet(
+            f"font-size: 13px; font-weight: 600; color: {accent}; background: transparent;"
+        )
 
         # Posiciona no canto superior direito do parent
         if self.parent():

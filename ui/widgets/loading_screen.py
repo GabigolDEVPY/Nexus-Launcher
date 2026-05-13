@@ -1,6 +1,7 @@
 """
 Tela de loading / splash com animação de pontos.
 """
+
 from PySide6.QtWidgets import QWidget, QVBoxLayout, QLabel
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QFont
@@ -19,7 +20,7 @@ class LoadingScreen(QWidget):
 
         self._label = QLabel(message)
         self._label.setFont(QFont("Segoe UI", 16))
-        self._label.setStyleSheet("color: #e8c547; background: transparent;")
+        self._label.setStyleSheet("color: #1EA1FF; background: transparent;")
         self._label.setAlignment(Qt.AlignCenter)
         layout.addWidget(self._label)
 

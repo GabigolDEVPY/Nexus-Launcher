@@ -1,6 +1,7 @@
 """
 Gerenciador de banco de dados — engine, sessões, migrações.
 """
+
 import os
 from contextlib import contextmanager
 from sqlalchemy import create_engine, event

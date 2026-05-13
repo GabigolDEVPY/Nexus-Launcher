@@ -3,6 +3,7 @@ Sincroniza o estado do launcher com o repositorio GitHub do usuario.
 O SQLite local continua existindo, mas o repo passa a guardar a fonte de verdade
 dos dados de usuario restauraveis.
 """
+
 from __future__ import annotations
 
 from datetime import datetime
@@ -40,7 +41,9 @@ class UserDataSyncService:
         "window_geometry",
     ]
 
-    def __init__(self, db: DatabaseManager, settings, sync_manager, notification_service):
+    def __init__(
+        self, db: DatabaseManager, settings, sync_manager, notification_service
+    ):
         self.db = db
         self.settings = settings
         self.sync_manager = sync_manager
@@ -65,10 +68,16 @@ class UserDataSyncService:
                 remote_snapshot.get("exported_at_utc", "")
             )
 
-            if (not local_has_state) or (remote_marker and remote_marker > local_marker):
+            if (not local_has_state) or (
+                remote_marker and remote_marker > local_marker
+            ):
                 if self.restore_snapshot(remote_snapshot):
                     self.settings.update_many(
-                        {"user_state_last_synced_at": remote_snapshot.get("exported_at_utc", "")}
+                        {
+                            "user_state_last_synced_at": remote_snapshot.get(
+                                "exported_at_utc", ""
+                            )
+                        }
                     )
                     logger.info("Estado do launcher restaurado do GitHub")
                     return True
@@ -103,9 +112,13 @@ class UserDataSyncService:
                 {"user_state_last_synced_at": snapshot["exported_at_utc"]}
             )
             if notify:
-                self.notification.success("Dados do launcher sincronizados com o GitHub.")
+                self.notification.success(
+                    "Dados do launcher sincronizados com o GitHub."
+                )
         elif notify:
-            self.notification.warning("Nao foi possivel sincronizar os dados do launcher.")
+            self.notification.warning(
+                "Nao foi possivel sincronizar os dados do launcher."
+            )
 
         return success
 
@@ -141,7 +154,9 @@ class UserDataSyncService:
                         developer=game_data.get("developer", ""),
                         publisher=game_data.get("publisher", ""),
                         release_date=game_data.get("release_date", ""),
-                        total_playtime_seconds=game_data.get("total_playtime_seconds", 0.0),
+                        total_playtime_seconds=game_data.get(
+                            "total_playtime_seconds", 0.0
+                        ),
                         last_played=self._parse_datetime(game_data.get("last_played")),
                         is_favorite=bool(game_data.get("is_favorite", False)),
                         category=game_data.get("category", "Uncategorized"),
@@ -168,7 +183,9 @@ class UserDataSyncService:
                         id=profile_data.get("id"),
                         game_id=profile_data.get("game_id"),
                         save_folder=profile_data.get("save_folder", ""),
-                        last_synced=self._parse_datetime(profile_data.get("last_synced")),
+                        last_synced=self._parse_datetime(
+                            profile_data.get("last_synced")
+                        ),
                         sync_enabled=bool(profile_data.get("sync_enabled", False)),
                         file_count=profile_data.get("file_count", 0),
                         total_size_bytes=profile_data.get("total_size_bytes", 0),
@@ -194,14 +211,15 @@ class UserDataSyncService:
         with self.db.session() as sess:
             games = sess.query(GameModel).order_by(GameModel.id).all()
             sessions = sess.query(SessionModel).order_by(SessionModel.id).all()
-            save_profiles = sess.query(SaveProfileModel).order_by(SaveProfileModel.id).all()
+            save_profiles = (
+                sess.query(SaveProfileModel).order_by(SaveProfileModel.id).all()
+            )
 
         return {
             "schema_version": self.SNAPSHOT_VERSION,
             "exported_at_utc": exported_at,
             "settings": {
-                key: self.settings.get(key)
-                for key in self.EXPORTED_SETTINGS_KEYS
+                key: self.settings.get(key) for key in self.EXPORTED_SETTINGS_KEYS
             },
             "games": [self._serialize_game(game) for game in games],
             "play_sessions": [self._serialize_session(session) for session in sessions],
@@ -258,7 +276,9 @@ class UserDataSyncService:
         readable_timestamp = exported_at.replace("T", " ").replace("Z", " UTC")
         return f"Launcher state: {reason} ({readable_timestamp})"
 
-    def _payload_changed(self, previous: dict[str, Any], current: dict[str, Any]) -> bool:
+    def _payload_changed(
+        self, previous: dict[str, Any], current: dict[str, Any]
+    ) -> bool:
         return self._without_exported_at(previous) != self._without_exported_at(current)
 
     @staticmethod

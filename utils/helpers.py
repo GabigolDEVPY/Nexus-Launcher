@@ -1,6 +1,7 @@
 """
 Utilitários gerais.
 """
+
 import os
 import re
 import hashlib
@@ -10,17 +11,17 @@ from typing import Optional
 
 def sanitize_filename(name: str) -> str:
     """Remove caracteres inválidos para nomes de arquivo/pasta."""
-    return re.sub(r'[<>:"/\\|?*]', '_', name).strip()
+    return re.sub(r'[<>:"/\\|?*]', "_", name).strip()
 
 
 def human_readable_size(size_bytes: int) -> str:
     if size_bytes < 1024:
         return f"{size_bytes} B"
-    elif size_bytes < 1024 ** 2:
+    elif size_bytes < 1024**2:
         return f"{size_bytes / 1024:.1f} KB"
-    elif size_bytes < 1024 ** 3:
-        return f"{size_bytes / (1024 ** 2):.1f} MB"
-    return f"{size_bytes / (1024 ** 3):.2f} GB"
+    elif size_bytes < 1024**3:
+        return f"{size_bytes / (1024**2):.1f} MB"
+    return f"{size_bytes / (1024**3):.2f} GB"
 
 
 def file_hash(filepath: str) -> str:

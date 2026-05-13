@@ -3,6 +3,7 @@ Servico de rastreamento de tempo de jogo.
 Detecta quando um processo e iniciado, atualiza o banco em tempo real
 e encerra a sessao quando o processo termina.
 """
+
 import os
 import time
 from datetime import datetime
@@ -133,8 +134,8 @@ class PlayTracker(QObject):
         except Exception as e:
             logger.warning(f"Lancamento direto falhou para jogo {game_id}: {e}")
 
-            fallback_ok, fallback_pid, fallback_message = self._launch_with_windows_shell(
-                exe_path
+            fallback_ok, fallback_pid, fallback_message = (
+                self._launch_with_windows_shell(exe_path)
             )
             if fallback_ok and fallback_pid:
                 return self._register_running_game(
@@ -209,19 +210,27 @@ class PlayTracker(QObject):
                 exe = os.path.normcase(info.get("exe") or "")
                 name = (info.get("name") or "").lower()
                 if exe == target_path or name == target_name:
-                    if candidate is None or (
-                        info.get("create_time") or 0
-                    ) > (candidate.info.get("create_time") or 0):
+                    if candidate is None or (info.get("create_time") or 0) > (
+                        candidate.info.get("create_time") or 0
+                    ):
                         candidate = proc
             except (psutil.NoSuchProcess, psutil.AccessDenied):
                 continue
 
         if candidate:
-            return True, candidate.pid, "Jogo aberto pelo Windows com rastreamento ativo."
+            return (
+                True,
+                candidate.pid,
+                "Jogo aberto pelo Windows com rastreamento ativo.",
+            )
 
-        return True, None, (
-            "Jogo aberto pelo Windows, mas nao consegui vincular o processo para "
-            "acompanhar as horas em tempo real."
+        return (
+            True,
+            None,
+            (
+                "Jogo aberto pelo Windows, mas nao consegui vincular o processo para "
+                "acompanhar as horas em tempo real."
+            ),
         )
 
     def _create_live_session(self, game_id: int) -> Tuple[int, float]:

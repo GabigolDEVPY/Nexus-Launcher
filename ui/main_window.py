@@ -2,15 +2,36 @@
 Janela principal do NexusLauncher.
 Layout: carrossel de jogos + painel de detalhes + background dinamico.
 """
+
+import hashlib
 from datetime import datetime
 import os
 from typing import Optional
 
-from PySide6.QtCore import QThread, QTimer, Qt, Signal
-from PySide6.QtGui import QAction, QColor, QFont, QIcon, QPainter, QPixmap
+from PySide6.QtCore import (
+    Property,
+    QEasingCurve,
+    QPropertyAnimation,
+    QThread,
+    QTimer,
+    Qt,
+    Signal,
+)
+from PySide6.QtGui import (
+    QAction,
+    QColor,
+    QFont,
+    QIcon,
+    QLinearGradient,
+    QPainter,
+    QPen,
+    QPixmap,
+    QRadialGradient,
+)
 from PySide6.QtWidgets import (
     QApplication,
     QFrame,
+    QGraphicsOpacityEffect,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -18,7 +39,6 @@ from PySide6.QtWidgets import (
     QMenu,
     QMessageBox,
     QPushButton,
-    QSplitter,
     QStackedWidget,
     QSystemTrayIcon,
     QVBoxLayout,
@@ -45,6 +65,87 @@ from utils.helpers import (
 from utils.logger import get_logger
 
 logger = get_logger("MainWindow")
+
+
+def _lerp_color(left: QColor, right: QColor, factor: float) -> QColor:
+    return QColor(
+        int(left.red() + (right.red() - left.red()) * factor),
+        int(left.green() + (right.green() - left.green()) * factor),
+        int(left.blue() + (right.blue() - left.blue()) * factor),
+        int(left.alpha() + (right.alpha() - left.alpha()) * factor),
+    )
+
+
+def _palette_for_game(game: GameData) -> tuple[QColor, QColor, QColor]:
+    seed = f"{game.name}|{game.genre}|{game.platform}|{game.id}".encode("utf-8")
+    digest = hashlib.sha1(seed).hexdigest()
+    hue = int(digest[:2], 16) * 359 // 255
+    primary = QColor.fromHsv(hue, 175, 210)
+    secondary = QColor.fromHsv((hue + 24) % 360, 155, 130)
+    tertiary = QColor.fromHsv((hue + 42) % 360, 110, 60)
+    return primary, secondary, tertiary
+
+
+class _LaunchOverlay(QWidget):
+    def __init__(self, game: GameData, accent: QColor, parent=None):
+        super().__init__(parent)
+        self._accent = accent
+        self._dot_count = 0
+
+        self.setGeometry(parent.rect())
+        self.setAttribute(Qt.WA_DeleteOnClose)
+        self.setAttribute(Qt.WA_TransparentForMouseEvents)
+        self.setStyleSheet("background: transparent;")
+
+        layout = QVBoxLayout(self)
+        layout.setAlignment(Qt.AlignCenter)
+        layout.setSpacing(18)
+
+        title = QLabel(game.name)
+        title.setAlignment(Qt.AlignCenter)
+        title.setStyleSheet(
+            "color: white;"
+            "font-family: 'Segoe UI';"
+            "font-size: 38px;"
+            "font-weight: 700;"
+            "background: transparent;"
+        )
+        layout.addWidget(title)
+
+        self._status_label = QLabel("Iniciando jogo...")
+        self._status_label.setAlignment(Qt.AlignCenter)
+        self._status_label.setStyleSheet(
+            "color: rgba(255,255,255,0.52);"
+            "font-family: 'Segoe UI';"
+            "font-size: 16px;"
+            "background: transparent;"
+        )
+        layout.addWidget(self._status_label)
+
+        self._timer = QTimer(self)
+        self._timer.timeout.connect(self._tick_dots)
+        self._timer.start(380)
+
+    def _tick_dots(self):
+        self._dot_count = (self._dot_count + 1) % 4
+        self._status_label.setText("Iniciando jogo" + "." * self._dot_count)
+
+    def stop(self):
+        self._timer.stop()
+
+    def paintEvent(self, event):
+        del event
+        painter = QPainter(self)
+        painter.fillRect(self.rect(), QColor(0, 0, 0, 224))
+
+        glow = QRadialGradient(self.width() / 2, self.height() / 2, self.width() * 0.34)
+        glow.setColorAt(
+            0.0,
+            QColor(self._accent.red(), self._accent.green(), self._accent.blue(), 100),
+        )
+        glow.setColorAt(1.0, QColor(0, 0, 0, 0))
+        painter.fillRect(self.rect(), glow)
+        painter.end()
 
 
 def _game_model_to_data(game: GameModel) -> GameData:
@@ -114,9 +215,7 @@ class _MetadataEnrichmentThread(QThread):
                 or payload.get("background_url", "")
             )
             cover_url = (
-                extra_images.get("cover")
-                or payload.get("cover_url", "")
-                or banner_url
+                extra_images.get("cover") or payload.get("cover_url", "") or banner_url
             )
 
             payload["banner_path"] = ""
@@ -192,6 +291,16 @@ class MainWindow(QMainWindow):
         self._tray_available = QSystemTrayIcon.isSystemTrayAvailable()
         self._tray_icon = None
         self._tray_message_shown = False
+        self._bg_from = [QColor("#0A1020")] * 3
+        self._bg_to = [QColor("#0A1020")] * 3
+        self._bg_t = 1.0
+        self._overlay_ref = None
+        self._overlay_anim_in = None
+        self._overlay_anim_out = None
+
+        self._bg_anim = QPropertyAnimation(self, b"bgProgress")
+        self._bg_anim.setDuration(850)
+        self._bg_anim.setEasingCurve(QEasingCurve.InOutCubic)
 
         self._user_state_timer = QTimer(self)
         self._user_state_timer.setInterval(30 * 60 * 1000)
@@ -208,8 +317,18 @@ class MainWindow(QMainWindow):
         self._user_state_timer.start()
         self._flush_user_state("abertura do launcher", notify=True, force=True)
 
+    def _get_bg_progress(self):
+        return self._bg_t
+
+    def _set_bg_progress(self, value):
+        self._bg_t = value
+        self.update()
+
+    bgProgress = Property(float, _get_bg_progress, _set_bg_progress)
+
     def _build_ui(self):
         central = QWidget()
+        central.setStyleSheet("background: transparent;")
         self.setCentralWidget(central)
 
         self._bg_label = QLabel(central)
@@ -222,11 +341,12 @@ class MainWindow(QMainWindow):
             QFrame {
                 background: qlineargradient(
                     x1:0, y1:0, x2:1, y2:1,
-                    stop:0 rgba(13,13,13,240),
-                    stop:0.3 rgba(13,13,13,200),
-                    stop:0.7 rgba(13,13,13,180),
-                    stop:1 rgba(13,13,13,250)
+                    stop:0 rgba(8,12,24,214),
+                    stop:0.36 rgba(8,12,24,168),
+                    stop:0.72 rgba(8,12,24,188),
+                    stop:1 rgba(8,12,24,242)
                 );
+                border: none;
             }
             """
         )
@@ -236,15 +356,32 @@ class MainWindow(QMainWindow):
         main_layout.setSpacing(0)
 
         top_bar = QFrame()
-        top_bar.setFixedHeight(56)
-        top_bar.setStyleSheet("background: rgba(0,0,0,0.4);")
+        top_bar.setFixedHeight(54)
+        top_bar.setStyleSheet(
+            "background: rgba(0,0,0,0.34);"
+            "border-bottom: 1px solid rgba(255,255,255,0.06);"
+        )
         top_layout = QHBoxLayout(top_bar)
-        top_layout.setContentsMargins(20, 0, 20, 0)
+        top_layout.setContentsMargins(22, 0, 22, 0)
+        top_layout.setSpacing(12)
 
-        logo = QLabel(APP_NAME)
+        emblem = QLabel("NX")
+        emblem.setStyleSheet(
+            "color: #1EA1FF;"
+            "font-family: 'Segoe UI';"
+            "font-size: 18px;"
+            "font-weight: 700;"
+            "background: transparent;"
+        )
+        top_layout.addWidget(emblem)
+
+        logo = QLabel(APP_NAME.upper())
         logo.setStyleSheet(
-            "font-family: 'Bebas Neue', 'Impact', sans-serif; "
-            "font-size: 24px; color: #e8c547; letter-spacing: 3px; "
+            "color: rgba(255,255,255,0.62);"
+            "font-family: 'Segoe UI';"
+            "font-size: 13px;"
+            "font-weight: 600;"
+            "letter-spacing: 4px;"
             "background: transparent;"
         )
         top_layout.addWidget(logo)
@@ -252,18 +389,71 @@ class MainWindow(QMainWindow):
 
         self._search_input = QLineEdit()
         self._search_input.setPlaceholderText("Buscar jogos...")
-        self._search_input.setFixedWidth(250)
+        self._search_input.setFixedWidth(280)
+        self._search_input.setFixedHeight(38)
+        self._search_input.setStyleSheet(
+            """
+            QLineEdit {
+                background: rgba(255,255,255,0.08);
+                color: white;
+                border: 1px solid rgba(255,255,255,0.10);
+                border-radius: 19px;
+                padding: 0 16px;
+                font-family: 'Segoe UI';
+                font-size: 12px;
+            }
+            QLineEdit:focus {
+                border-color: rgba(33,150,243,0.80);
+                background: rgba(255,255,255,0.11);
+            }
+            QLineEdit::placeholder {
+                color: rgba(255,255,255,0.34);
+            }
+            """
+        )
         self._search_input.textChanged.connect(self._on_search)
         top_layout.addWidget(self._search_input)
 
         add_btn = QPushButton("+  Adicionar")
+        add_btn.setFixedSize(132, 38)
         add_btn.clicked.connect(self._add_game)
+        add_btn.setStyleSheet(
+            """
+            QPushButton {
+                background: rgba(255,255,255,0.08);
+                color: white;
+                border: 1px solid rgba(255,255,255,0.12);
+                border-radius: 19px;
+                font-family: 'Segoe UI';
+                font-size: 11px;
+                font-weight: 700;
+                letter-spacing: 1px;
+            }
+            QPushButton:hover {
+                background: rgba(255,255,255,0.14);
+                border-color: rgba(255,255,255,0.22);
+            }
+            QPushButton:pressed {
+                background: rgba(255,255,255,0.20);
+            }
+            """
+        )
         top_layout.addWidget(add_btn)
 
         config_btn = QPushButton("Config")
-        config_btn.setFixedHeight(40)
+        config_btn.setFixedSize(106, 38)
         config_btn.clicked.connect(self._open_settings)
+        config_btn.setStyleSheet(add_btn.styleSheet())
         top_layout.addWidget(config_btn)
+
+        self._clock_label = QLabel()
+        self._clock_label.setStyleSheet(
+            "color: rgba(255,255,255,0.42);"
+            "font-family: 'Segoe UI';"
+            "font-size: 12px;"
+            "background: transparent;"
+        )
+        top_layout.addWidget(self._clock_label)
 
         main_layout.addWidget(top_bar)
 
@@ -273,30 +463,71 @@ class MainWindow(QMainWindow):
 
         content_widget = QWidget()
         content_widget.setStyleSheet("background: transparent;")
-        content_layout = QHBoxLayout(content_widget)
+        content_layout = QVBoxLayout(content_widget)
         content_layout.setContentsMargins(0, 0, 0, 0)
         content_layout.setSpacing(0)
 
-        splitter = QSplitter(Qt.Vertical)
-        splitter.setHandleWidth(0)
-        splitter.setStyleSheet("QSplitter { background: transparent; border: none; }")
-
         self._detail_panel = GameDetailPanel()
-        splitter.addWidget(self._detail_panel)
+        content_layout.addWidget(self._detail_panel, 1)
 
         self._carousel = GameCarousel()
-        self._carousel.setFixedHeight(380)
-        splitter.addWidget(self._carousel)
-
-        splitter.setStretchFactor(0, 3)
-        splitter.setStretchFactor(1, 1)
-        content_layout.addWidget(splitter)
+        self._carousel.setFixedHeight(312)
+        content_layout.addWidget(self._carousel)
 
         self._stack.addWidget(content_widget)
         self._stack.setCurrentIndex(1)
-        main_layout.addWidget(self._stack)
+        main_layout.addWidget(self._stack, 1)
+
+        bottom_bar = QFrame()
+        bottom_bar.setFixedHeight(38)
+        bottom_bar.setStyleSheet(
+            "background: rgba(0,0,0,0.42);border-top: 1px solid rgba(255,255,255,0.06);"
+        )
+        bottom_layout = QHBoxLayout(bottom_bar)
+        bottom_layout.setContentsMargins(26, 0, 26, 0)
+        bottom_layout.setSpacing(18)
+
+        for hint_text in [
+            "< >  Navegar",
+            "ENTER  Jogar",
+            "ESC  Sair",
+        ]:
+            hint = QLabel(hint_text)
+            hint.setStyleSheet(
+                "color: rgba(255,255,255,0.32);"
+                "font-family: 'Segoe UI';"
+                "font-size: 11px;"
+                "background: transparent;"
+            )
+            bottom_layout.addWidget(hint)
+
+        bottom_layout.addStretch()
+
+        self._library_summary_label = QLabel("Biblioteca: 0 jogos")
+        self._library_summary_label.setStyleSheet(
+            "color: rgba(255,255,255,0.28);"
+            "font-family: 'Segoe UI';"
+            "font-size: 11px;"
+            "background: transparent;"
+        )
+        bottom_layout.addWidget(self._library_summary_label)
+
+        main_layout.addWidget(bottom_bar)
 
         self._toast = ToastWidget(self)
+
+        self._fade_fx = QGraphicsOpacityEffect(self._detail_panel)
+        self._fade_fx.setOpacity(1.0)
+        self._detail_panel.setGraphicsEffect(self._fade_fx)
+
+        self._fade_anim = QPropertyAnimation(self._fade_fx, b"opacity")
+        self._fade_anim.setDuration(220)
+        self._fade_anim.setEasingCurve(QEasingCurve.OutQuad)
+
+        self._clock = QTimer(self)
+        self._clock.timeout.connect(self._update_clock)
+        self._clock.start(1000)
+        self._update_clock()
 
     def _setup_tray(self):
         if not self._tray_available:
@@ -324,10 +555,10 @@ class MainWindow(QMainWindow):
 
     def _build_app_icon(self) -> QIcon:
         pixmap = QPixmap(64, 64)
-        pixmap.fill(QColor("#0d0d0d"))
+        pixmap.fill(QColor("#08111f"))
         painter = QPainter(pixmap)
-        painter.setPen(QColor("#e8c547"))
-        painter.setBrush(QColor("#1a1a1a"))
+        painter.setPen(QColor("#1EA1FF"))
+        painter.setBrush(QColor("#0D1628"))
         painter.drawRoundedRect(2, 2, 60, 60, 12, 12)
         painter.setFont(QFont("Segoe UI", 28, QFont.Bold))
         painter.drawText(pixmap.rect(), Qt.AlignCenter, "N")
@@ -361,11 +592,15 @@ class MainWindow(QMainWindow):
         menu_bar.setStyleSheet(
             """
             QMenuBar {
-                background: rgba(0,0,0,0.3);
-                color: #aaa;
+                background: rgba(0,0,0,0.26);
+                color: rgba(255,255,255,0.68);
                 font-size: 12px;
+                border-bottom: 1px solid rgba(255,255,255,0.04);
             }
-            QMenuBar::item:selected { background: #222; color: #fff; }
+            QMenuBar::item:selected {
+                background: rgba(255,255,255,0.09);
+                color: #fff;
+            }
             """
         )
 
@@ -420,18 +655,25 @@ class MainWindow(QMainWindow):
         self._all_games.clear()
 
         with self.db.session() as sess:
-            games = sess.query(GameModel).order_by(
-                GameModel.is_favorite.desc(),
-                GameModel.last_played.desc().nullslast(),
-                GameModel.name,
-            ).all()
+            games = (
+                sess.query(GameModel)
+                .order_by(
+                    GameModel.is_favorite.desc(),
+                    GameModel.last_played.desc().nullslast(),
+                    GameModel.name,
+                )
+                .all()
+            )
             for game in games:
                 self._all_games.append(_game_model_to_data(game))
 
+        self._refresh_library_summary()
         self._carousel.set_games(self._all_games)
 
         if not self._all_games:
             self._current_game = None
+            self._bg_label.clear()
+            self._transition_background(None)
             self._detail_panel.set_metadata_status(
                 "Nenhum jogo na biblioteca. Adicione um executavel para comecar.",
                 "info",
@@ -442,9 +684,11 @@ class MainWindow(QMainWindow):
         if last_id:
             for game in self._all_games:
                 if game.id == last_id:
+                    self._carousel.select_game_by_id(game.id, emit_signal=False)
                     self._on_game_selected(game)
                     return
 
+        self._carousel.select_game_by_id(self._all_games[0].id, emit_signal=False)
         self._on_game_selected(self._all_games[0])
 
     def _load_game_data_by_id(self, game_id: int) -> Optional[GameData]:
@@ -455,8 +699,20 @@ class MainWindow(QMainWindow):
             return _game_model_to_data(game)
 
     def _on_game_selected(self, game: GameData):
+        same_game = self._current_game and self._current_game.id == game.id
         self._current_game = game
+        self._carousel.select_game_by_id(game.id, emit_signal=False)
+
+        if same_game:
+            return
+
+        self._fade_anim.stop()
+        self._fade_fx.setOpacity(0.0)
         self._detail_panel.set_game(game)
+        self._fade_anim.setStartValue(0.0)
+        self._fade_anim.setEndValue(1.0)
+        self._fade_anim.start()
+
         self.settings.set("last_selected_game_id", game.id)
         self._refresh_play_button_state()
 
@@ -473,22 +729,11 @@ class MainWindow(QMainWindow):
         self._maybe_enrich_game_metadata(game)
 
     def _update_background(self, game: GameData):
-        bg_path = self._resolve_display_image(game)
-        if bg_path:
-            pixmap = QPixmap(bg_path)
-            if not pixmap.isNull():
-                scaled = pixmap.scaled(
-                    self.size(),
-                    Qt.KeepAspectRatioByExpanding,
-                    Qt.SmoothTransformation,
-                )
-                self._bg_label.setPixmap(scaled)
-                self._bg_label.setGeometry(0, 0, self.width(), self.height())
-                self._bg_label.lower()
-                self._overlay.setGeometry(0, 0, self.width(), self.height())
-                self._overlay.lower()
-                return
+        self._transition_background(game)
         self._bg_label.clear()
+        self._bg_label.lower()
+        self._overlay.setGeometry(0, 0, self.width(), self.height())
+        self._overlay.lower()
 
     def _on_play(self, game_id: int):
         self._detail_panel.set_play_button_state("ABRINDO...", False)
@@ -510,6 +755,9 @@ class MainWindow(QMainWindow):
 
         if success:
             self.notification_service.success(f"{game.name}: {message}")
+            current_data = self._current_game
+            if current_data and current_data.id == game_id:
+                self._show_launch_overlay(current_data)
             if self.play_tracker.is_running(game_id):
                 self._refresh_play_button_state()
             else:
@@ -564,7 +812,9 @@ class MainWindow(QMainWindow):
             game_data = _game_model_to_data(game)
             previous_name = game.name
             profile = sess.query(SaveProfileModel).filter_by(game_id=game_id).first()
-            previous_save_folder = profile.save_folder if profile else (game.save_folder or "")
+            previous_save_folder = (
+                profile.save_folder if profile else (game.save_folder or "")
+            )
             previous_sync_enabled = profile.sync_enabled if profile else False
             sync_enabled = profile.sync_enabled if profile else global_sync_enabled
 
@@ -582,13 +832,19 @@ class MainWindow(QMainWindow):
         save_folder_changed = previous_save_folder != data["save_folder"]
         has_remote_save = False
         if self.sync_manager.is_configured():
-            has_remote_save = self.sync_manager.get_sync_status(previous_name, game_id)["synced"]
+            has_remote_save = self.sync_manager.get_sync_status(previous_name, game_id)[
+                "synced"
+            ]
 
         with self.db.session() as sess:
-            duplicate = sess.query(GameModel).filter(
-                GameModel.executable_path == data["executable_path"],
-                GameModel.id != game_id,
-            ).first()
+            duplicate = (
+                sess.query(GameModel)
+                .filter(
+                    GameModel.executable_path == data["executable_path"],
+                    GameModel.id != game_id,
+                )
+                .first()
+            )
             if duplicate:
                 self.notification_service.error(
                     "Ja existe outro jogo cadastrado com este executavel."
@@ -647,8 +903,7 @@ class MainWindow(QMainWindow):
             and global_sync_enabled
             and not save_folder_changed
             and (
-                previous_save_folder != data["save_folder"]
-                or not previous_sync_enabled
+                previous_save_folder != data["save_folder"] or not previous_sync_enabled
             )
         )
 
@@ -707,13 +962,13 @@ class MainWindow(QMainWindow):
 
     def _save_new_game(self, data: dict):
         with self.db.session() as sess:
-            existing = sess.query(GameModel).filter_by(
-                executable_path=data["executable_path"]
-            ).first()
+            existing = (
+                sess.query(GameModel)
+                .filter_by(executable_path=data["executable_path"])
+                .first()
+            )
             if existing:
-                self.notification_service.warning(
-                    "Este jogo ja esta na biblioteca."
-                )
+                self.notification_service.warning("Este jogo ja esta na biblioteca.")
                 return
 
             game = GameModel(
@@ -754,9 +1009,7 @@ class MainWindow(QMainWindow):
         self.settings.set("last_selected_game_id", game_id)
         self._metadata_attempted_ids.discard(game_id)
         self._load_games()
-        self.notification_service.success(
-            f"'{data['name']}' adicionado a biblioteca!"
-        )
+        self.notification_service.success(f"'{data['name']}' adicionado a biblioteca!")
 
         if data.get("save_folder") and self.settings.get("save_sync_enabled", False):
             self._sync_game_now(game_id)
@@ -767,11 +1020,16 @@ class MainWindow(QMainWindow):
         query = text.strip().lower()
         if not query:
             self._carousel.set_games(self._all_games)
+            if self._current_game:
+                self._carousel.select_game_by_id(
+                    self._current_game.id, emit_signal=False
+                )
             return
 
         filtered = [game for game in self._all_games if query in game.name.lower()]
         self._carousel.set_games(filtered)
         if filtered:
+            self._carousel.select_game_by_id(filtered[0].id, emit_signal=False)
             self._on_game_selected(filtered[0])
 
     def _open_settings(self):
@@ -873,7 +1131,9 @@ class MainWindow(QMainWindow):
         if not os.path.isdir(save_folder):
             os.makedirs(save_folder, exist_ok=True)
 
-        if not self.settings.get("github_repo_url") or not self.settings.get("github_token"):
+        if not self.settings.get("github_repo_url") or not self.settings.get(
+            "github_token"
+        ):
             if notify:
                 self.notification_service.warning(
                     "Configure a URL do repositorio e o token do GitHub antes de sincronizar."
@@ -935,7 +1195,6 @@ class MainWindow(QMainWindow):
                 return True
 
         file_count = count_files(save_folder)
-        total_size = get_directory_size(save_folder)
         if file_count == 0:
             if notify:
                 self.notification_service.warning(
@@ -1085,7 +1344,9 @@ class MainWindow(QMainWindow):
             with self.db.session() as sess:
                 game = sess.get(GameModel, game_id)
                 if game:
-                    metadata = self.sync_manager.get_game_sync_metadata(game_id, game.name)
+                    metadata = self.sync_manager.get_game_sync_metadata(
+                        game_id, game.name
+                    )
 
         last_synced = fallback_timestamp
         if metadata and metadata.get("synced_at_utc"):
@@ -1215,18 +1476,157 @@ class MainWindow(QMainWindow):
         QMessageBox.about(
             self,
             "Sobre",
-            f"<h2 style='color: #e8c547;'>{APP_NAME}</h2>"
+            f"<h2 style='color: #1EA1FF;'>{APP_NAME}</h2>"
             f"<p>Versao 1.0.0</p>"
             f"<p>Game Launcher profissional com sincronizacao automatica "
             f"de saves via GitHub.</p>"
             f"<p>Desenvolvido com Python + PySide6</p>",
         )
 
+    def _update_clock(self):
+        self._clock_label.setText(datetime.now().strftime("%H:%M  .  %d/%m/%Y"))
+
+    def _refresh_library_summary(self):
+        total = len(self._all_games)
+        favorites = sum(1 for game in self._all_games if game.is_favorite)
+        sync_state = "ON" if self.settings.get("save_sync_enabled", False) else "OFF"
+        self._library_summary_label.setText(
+            f"Biblioteca: {total} jogos  .  Favoritos: {favorites}  .  Sync: {sync_state}"
+        )
+
+    def _transition_background(self, game: Optional[GameData]):
+        if game is None:
+            target = [QColor("#0A1020"), QColor("#111B2E"), QColor("#060910")]
+        else:
+            target = list(_palette_for_game(game))
+
+        if self._bg_t < 1.0:
+            self._bg_from = [
+                _lerp_color(self._bg_from[index], self._bg_to[index], self._bg_t)
+                for index in range(3)
+            ]
+        else:
+            self._bg_from = list(self._bg_to)
+
+        self._bg_to = target
+        self._bg_anim.stop()
+        self._bg_anim.setStartValue(0.0)
+        self._bg_anim.setEndValue(1.0)
+        self._bg_anim.start()
+
+    def _show_launch_overlay(self, game: GameData):
+        if self._overlay_ref is not None:
+            self._overlay_ref.close()
+
+        accent = _palette_for_game(game)[0]
+        overlay = _LaunchOverlay(game, accent, self)
+        overlay.show()
+        overlay.raise_()
+
+        fx = QGraphicsOpacityEffect(overlay)
+        overlay.setGraphicsEffect(fx)
+        anim_in = QPropertyAnimation(fx, b"opacity")
+        anim_in.setDuration(280)
+        anim_in.setStartValue(0.0)
+        anim_in.setEndValue(1.0)
+        anim_in.start()
+
+        self._overlay_ref = overlay
+        self._overlay_anim_in = anim_in
+        QTimer.singleShot(2200, lambda: self._close_launch_overlay(overlay))
+
+    def _close_launch_overlay(self, overlay):
+        if overlay is None:
+            return
+        overlay.stop()
+        fx = overlay.graphicsEffect()
+        if fx:
+            anim_out = QPropertyAnimation(fx, b"opacity")
+            anim_out.setDuration(320)
+            anim_out.setStartValue(1.0)
+            anim_out.setEndValue(0.0)
+            anim_out.finished.connect(overlay.close)
+            anim_out.start()
+            self._overlay_anim_out = anim_out
+        else:
+            overlay.close()
+        if self._overlay_ref is overlay:
+            self._overlay_ref = None
+
     def resizeEvent(self, event):
         super().resizeEvent(event)
         self._bg_label.setGeometry(0, 0, self.width(), self.height())
         self._overlay.setGeometry(0, 0, self.width(), self.height())
         self._toast.setGeometry(self.width() - 380, 20, 360, 56)
+        if self._overlay_ref is not None:
+            self._overlay_ref.setGeometry(self.rect())
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+
+        width = self.width()
+        height = self.height()
+        progress = self._bg_t
+        first = _lerp_color(self._bg_from[0], self._bg_to[0], progress)
+        second = _lerp_color(self._bg_from[1], self._bg_to[1], progress)
+        third = _lerp_color(self._bg_from[2], self._bg_to[2], progress)
+
+        painter.fillRect(self.rect(), QColor("#060A14"))
+
+        base_gradient = QLinearGradient(0, 0, 0, height)
+        base_gradient.setColorAt(0.0, QColor("#0A1020"))
+        base_gradient.setColorAt(1.0, QColor("#05070E"))
+        painter.fillRect(self.rect(), base_gradient)
+
+        painter.setPen(QPen(QColor(255, 255, 255, 5), 1))
+        for x_pos in range(0, width, 64):
+            painter.drawLine(x_pos, 0, x_pos, height)
+        for y_pos in range(0, height, 64):
+            painter.drawLine(0, y_pos, width, y_pos)
+
+        left_glow = QRadialGradient(width * 0.18, height * 0.34, width * 0.52)
+        left_glow.setColorAt(0.0, QColor(first.red(), first.green(), first.blue(), 88))
+        left_glow.setColorAt(1.0, QColor(0, 0, 0, 0))
+        painter.fillRect(self.rect(), left_glow)
+
+        right_glow = QRadialGradient(width * 0.84, height * 0.58, width * 0.42)
+        right_glow.setColorAt(
+            0.0, QColor(second.red(), second.green(), second.blue(), 60)
+        )
+        right_glow.setColorAt(1.0, QColor(0, 0, 0, 0))
+        painter.fillRect(self.rect(), right_glow)
+
+        center_wash = QRadialGradient(width * 0.56, height * 0.24, width * 0.30)
+        center_wash.setColorAt(
+            0.0, QColor(third.red(), third.green(), third.blue(), 42)
+        )
+        center_wash.setColorAt(1.0, QColor(0, 0, 0, 0))
+        painter.fillRect(self.rect(), center_wash)
+
+        vignette = QRadialGradient(width / 2, height / 2, max(width, height) * 0.74)
+        vignette.setColorAt(0.0, QColor(0, 0, 0, 0))
+        vignette.setColorAt(1.0, QColor(0, 0, 0, 145))
+        painter.fillRect(self.rect(), vignette)
+        painter.end()
+
+        super().paintEvent(event)
+
+    def keyPressEvent(self, event):
+        if event.key() == Qt.Key_Right:
+            self._carousel.move_selection(1)
+            return
+        if event.key() == Qt.Key_Left:
+            self._carousel.move_selection(-1)
+            return
+        if event.key() in (Qt.Key_Return, Qt.Key_Enter):
+            if self._current_game:
+                self._on_play(self._current_game.id)
+            return
+        if event.key() == Qt.Key_Escape:
+            self.close()
+            return
+        super().keyPressEvent(event)
 
     def closeEvent(self, event):
         if self._metadata_thread and self._metadata_thread.isRunning():
@@ -1343,14 +1743,15 @@ class MainWindow(QMainWindow):
         self._sync_user_state(f"metadados atualizados do jogo {game_id}")
 
     def _on_metadata_enrichment_error(self, message: str):
-        if self._current_game and self._current_game.id == self._metadata_target_game_id:
+        if (
+            self._current_game
+            and self._current_game.id == self._metadata_target_game_id
+        ):
             self._detail_panel.set_metadata_status(
                 f"Falha ao buscar metadados: {message}",
                 "error",
             )
-        self.notification_service.warning(
-            f"Falha ao buscar metadados: {message}"
-        )
+        self.notification_service.warning(f"Falha ao buscar metadados: {message}")
 
     def _on_metadata_enrichment_finished(self):
         self._metadata_target_game_id = None

@@ -1,6 +1,7 @@
 """
 NexusLauncher - Ponto de entrada principal.
 """
+
 import os
 import sys
 
@@ -11,9 +12,9 @@ from core.constants import prepare_runtime_environment
 
 prepare_runtime_environment()
 
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication  # noqa: E402
 
-from core.app import NexusApp
+from core.app import NexusApp  # noqa: E402
 
 
 def main():

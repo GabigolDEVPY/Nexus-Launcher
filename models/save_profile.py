@@ -17,7 +17,7 @@ class SaveProfileData:
     def size_formatted(self) -> str:
         if self.total_size_bytes < 1024:
             return f"{self.total_size_bytes} B"
-        elif self.total_size_bytes < 1024 ** 2:
+        elif self.total_size_bytes < 1024**2:
             return f"{self.total_size_bytes / 1024:.1f} KB"
         else:
-            return f"{self.total_size_bytes / (1024 ** 2):.1f} MB"
+            return f"{self.total_size_bytes / (1024**2):.1f} MB"

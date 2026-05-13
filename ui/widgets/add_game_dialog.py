@@ -2,6 +2,7 @@
 Dialogo para adicionar um novo jogo a biblioteca.
 Busca metadados automaticamente e permite edicao manual.
 """
+
 import os
 
 from PySide6.QtCore import QThread, Qt, Signal
@@ -86,7 +87,9 @@ class _MetadataDetailsThread(QThread):
 
             if banner_url:
                 payload["banner_path"] = (
-                    self.image_service.get_or_download(f"banner_{cache_key}", banner_url)
+                    self.image_service.get_or_download(
+                        f"banner_{cache_key}", banner_url
+                    )
                     or ""
                 )
             if cover_url:
@@ -128,7 +131,7 @@ class AddGameDialog(QDialog):
             QGroupBox {
                 border: 1px solid #2a2a2a; border-radius: 8px;
                 margin-top: 12px; padding-top: 20px;
-                color: #e8c547; font-weight: bold;
+                color: #1EA1FF; font-weight: bold;
             }
             QGroupBox::title { subcontrol-origin: margin; padding: 0 10px; }
             """
@@ -240,12 +243,12 @@ class AddGameDialog(QDialog):
         self._add_btn.setStyleSheet(
             """
             QPushButton {
-                background-color: #e8c547; color: #0d0d0d;
+                background-color: #1EA1FF; color: #ffffff;
                 font-weight: bold; padding: 10px 30px;
                 border: none; border-radius: 6px;
             }
-            QPushButton:hover { background-color: #f0d060; }
-            QPushButton:disabled { background-color: #7c6a29; color: #1e1e1e; }
+            QPushButton:hover { background-color: #4DB8FF; }
+            QPushButton:disabled { background-color: #0D4A7A; color: #8EC3E8; }
             """
         )
         self._add_btn.clicked.connect(self._on_add)
@@ -471,7 +474,7 @@ class AddGameDialog(QDialog):
         colors = {
             "info": "#9aa4b2",
             "success": "#4ade80",
-            "warning": "#facc15",
+            "warning": "#FB923C",
             "error": "#f87171",
         }
         self._status_label.setStyleSheet(
@@ -480,9 +483,8 @@ class AddGameDialog(QDialog):
         self._status_label.setText(message)
 
     def reject(self):
-        if (
-            (self._search_thread and self._search_thread.isRunning())
-            or (self._details_thread and self._details_thread.isRunning())
+        if (self._search_thread and self._search_thread.isRunning()) or (
+            self._details_thread and self._details_thread.isRunning()
         ):
             QMessageBox.information(
                 self,

@@ -4,11 +4,15 @@ __pycache__/
 *.pyd
 *.pyo
 *.so
-
+vendor
+/vendor
 # Virtual environment
 .venv/
 venv/
-
+BUILD_INSTRUCTIONS.md
+build_release.ps1
+/build_release.ps1
+BUILD_WINDOWS.md
 # IDE / editor
 .vscode/
 .idea/

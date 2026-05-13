@@ -2,6 +2,7 @@
 Monitoramento de pastas de save em tempo real usando Watchdog.
 Detecta alteracoes, cria commits e faz push automatico.
 """
+
 import os
 import threading
 from typing import Dict
@@ -156,10 +157,14 @@ class SaveWatcher(QObject):
         logger.info(f"Alteracao detectada em saves de '{game_name}'")
 
         with self.db.session() as sess:
-            profile = sess.query(SaveProfileModel).filter_by(
-                game_id=game_id,
-                sync_enabled=True,
-            ).first()
+            profile = (
+                sess.query(SaveProfileModel)
+                .filter_by(
+                    game_id=game_id,
+                    sync_enabled=True,
+                )
+                .first()
+            )
             if not profile:
                 return
 

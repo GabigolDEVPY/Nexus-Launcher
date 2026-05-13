@@ -1,6 +1,7 @@
 """
 Dialogo de configuracoes do NexusLauncher.
 """
+
 from PySide6.QtWidgets import (
     QCheckBox,
     QDialog,
@@ -20,7 +21,9 @@ from PySide6.QtWidgets import (
 class SettingsDialog(QDialog):
     """Configuracoes globais: GitHub, APIs e comportamento da aplicacao."""
 
-    def __init__(self, settings, sync_manager, startup_service, tray_supported, parent=None):
+    def __init__(
+        self, settings, sync_manager, startup_service, tray_supported, parent=None
+    ):
         super().__init__(parent)
         self.settings = settings
         self.sync_manager = sync_manager
@@ -50,11 +53,11 @@ class SettingsDialog(QDialog):
         save_btn.setStyleSheet(
             """
             QPushButton {
-                background-color: #e8c547; color: #0d0d0d;
+                background-color: #1EA1FF; color: #ffffff;
                 font-weight: bold; padding: 10px 30px;
                 border: none; border-radius: 6px;
             }
-            QPushButton:hover { background-color: #f0d060; }
+            QPushButton:hover { background-color: #4DB8FF; }
             """
         )
         save_btn.clicked.connect(self._save)
@@ -153,15 +156,19 @@ class SettingsDialog(QDialog):
         form.addRow("", self._start_with_windows)
 
         if not self.tray_supported:
-            tray_note = QLabel("A bandeja do sistema nao esta disponivel neste ambiente.")
+            tray_note = QLabel(
+                "A bandeja do sistema nao esta disponivel neste ambiente."
+            )
             tray_note.setWordWrap(True)
-            tray_note.setStyleSheet("color: #facc15; font-size: 12px;")
+            tray_note.setStyleSheet("color: #7EB8E0; font-size: 12px;")
             form.addRow("", tray_note)
 
         if not self.startup_service.supported:
-            startup_note = QLabel("Iniciar com o Windows so esta disponivel no Windows.")
+            startup_note = QLabel(
+                "Iniciar com o Windows so esta disponivel no Windows."
+            )
             startup_note.setWordWrap(True)
-            startup_note.setStyleSheet("color: #facc15; font-size: 12px;")
+            startup_note.setStyleSheet("color: #7EB8E0; font-size: 12px;")
             form.addRow("", startup_note)
 
         live_note = QLabel(

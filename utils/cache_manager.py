@@ -1,10 +1,10 @@
 """
 Gerenciador de cache de imagens e metadados em disco.
 """
+
 import os
 import json
 import shutil
-from datetime import datetime, timedelta
 from typing import Optional
 from PIL import Image
 from core.constants import IMAGE_CACHE_DIR, CACHE_DIR

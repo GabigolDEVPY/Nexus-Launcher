@@ -1,12 +1,19 @@
 """
 Definição das tabelas do banco usando SQLAlchemy declarativo.
 """
+
 from datetime import datetime
 from sqlalchemy import (
-    Column, Integer, String, Float, Boolean, DateTime,
-    Text, ForeignKey, create_engine, event,
+    Column,
+    Integer,
+    String,
+    Float,
+    Boolean,
+    DateTime,
+    Text,
+    ForeignKey,
 )
-from sqlalchemy.orm import declarative_base, relationship, sessionmaker
+from sqlalchemy.orm import declarative_base, relationship
 
 Base = declarative_base()
 

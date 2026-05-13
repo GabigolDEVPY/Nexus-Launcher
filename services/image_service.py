@@ -1,7 +1,7 @@
 """
 Serviço de download e cache de imagens de jogos.
 """
-import os
+
 import requests
 from typing import Optional
 from PIL import Image
@@ -18,7 +18,9 @@ class ImageService:
     def __init__(self):
         self.cache = CacheManager()
 
-    def get_or_download(self, key: str, url: str, size: Optional[tuple] = None) -> Optional[str]:
+    def get_or_download(
+        self, key: str, url: str, size: Optional[tuple] = None
+    ) -> Optional[str]:
         """Retorna caminho local. Baixa se não estiver em cache."""
         if not url:
             return None
@@ -29,7 +31,9 @@ class ImageService:
 
         return self.download(key, url, size)
 
-    def download(self, key: str, url: str, size: Optional[tuple] = None) -> Optional[str]:
+    def download(
+        self, key: str, url: str, size: Optional[tuple] = None
+    ) -> Optional[str]:
         """Baixa uma imagem e salva no cache."""
         try:
             resp = requests.get(url, timeout=15, stream=True)
@@ -47,8 +51,9 @@ class ImageService:
             logger.warning(f"Falha ao baixar imagem '{key}': {e}")
             return None
 
-    def create_placeholder(self, key: str, text: str = "No Image",
-                           size=(460, 215)) -> str:
+    def create_placeholder(
+        self, key: str, text: str = "No Image", size=(460, 215)
+    ) -> str:
         """Gera uma imagem placeholder com texto."""
         cached = self.cache.get_image_path(key)
         if cached:

@@ -2,6 +2,7 @@
 Servico de busca de metadados de jogos.
 Usa RAWG quando configurado e recorre ao catalogo publico da Steam como fallback.
 """
+
 from typing import Dict, List, Optional
 
 import requests
@@ -217,18 +218,18 @@ class MetadataService:
                 "rawg_id": data.get("id"),
                 "steam_appid": None,
                 "name": data.get("name", ""),
-                "description": self._clean_description(
-                    data.get("description_raw", "")
-                ),
-                "genre": ", ".join(
-                    genre["name"] for genre in data.get("genres", [])
-                ),
+                "description": self._clean_description(data.get("description_raw", "")),
+                "genre": ", ".join(genre["name"] for genre in data.get("genres", [])),
                 "developer": ", ".join(
                     dev["name"] for dev in data.get("developers", [])
-                ) if data.get("developers") else "",
+                )
+                if data.get("developers")
+                else "",
                 "publisher": ", ".join(
                     pub["name"] for pub in data.get("publishers", [])
-                ) if data.get("publishers") else "",
+                )
+                if data.get("publishers")
+                else "",
                 "release_date": data.get("released", ""),
                 "background_url": data.get("background_image", ""),
                 "cover_url": data.get("background_image_additional", "")
@@ -283,7 +284,8 @@ class MetadataService:
                     platform.upper()
                     for platform, enabled in (data.get("platforms") or {}).items()
                     if enabled
-                ) or "PC",
+                )
+                or "PC",
             }
         except requests.RequestException as e:
             logger.warning(f"Steam detail request failed: {e}")

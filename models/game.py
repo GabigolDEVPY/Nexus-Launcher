@@ -1,9 +1,10 @@
 """
 Dataclass que representa um jogo — usada como DTO entre camadas.
 """
-from dataclasses import dataclass, field
+
+from dataclasses import dataclass
 from datetime import datetime
-from typing import Optional, List
+from typing import Optional
 
 
 @dataclass

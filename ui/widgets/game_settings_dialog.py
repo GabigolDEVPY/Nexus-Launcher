@@ -1,6 +1,7 @@
 """
 Dialogo para editar as configuracoes de um jogo ja cadastrado.
 """
+
 import os
 
 from PySide6.QtWidgets import (
@@ -21,7 +22,9 @@ from PySide6.QtWidgets import (
 class GameSettingsDialog(QDialog):
     """Permite editar executavel, save folder e opcoes de sync do jogo."""
 
-    def __init__(self, game, sync_enabled: bool, global_sync_enabled: bool, parent=None):
+    def __init__(
+        self, game, sync_enabled: bool, global_sync_enabled: bool, parent=None
+    ):
         super().__init__(parent)
         self.result_data = None
         self.sync_now_requested = False

@@ -2,6 +2,7 @@
 Gerenciador de sincronizacao com GitHub.
 Clona repositorios, cria commits e faz push de save-games e do estado do launcher.
 """
+
 import json
 import os
 import shutil
@@ -14,7 +15,7 @@ from git import GitCommandError, Repo, refresh
 from git.exc import GitCommandNotFound, InvalidGitRepositoryError
 
 from core.constants import BASE_DIR, CACHE_DIR, RESOURCE_DIR
-from utils.helpers import count_files, file_hash, get_directory_size, sanitize_filename
+from utils.helpers import count_files, file_hash, sanitize_filename
 from utils.logger import get_logger
 
 logger = get_logger("SyncManager")
@@ -134,8 +135,12 @@ class SyncManager:
                 exclude_names={self.GAME_SYNC_META_FILENAME},
             )
 
-            meta_relative_path = self._get_game_sync_meta_relative_path(game_id, game_name)
-            meta_exists = os.path.isfile(os.path.join(self._repo_path, meta_relative_path))
+            meta_relative_path = self._get_game_sync_meta_relative_path(
+                game_id, game_name
+            )
+            meta_exists = os.path.isfile(
+                os.path.join(self._repo_path, meta_relative_path)
+            )
             meta_written = False
             synced_at = self._current_sync_timestamp()
 
@@ -219,7 +224,9 @@ class SyncManager:
             ),
         }
 
-    def restore_game_saves(self, game_id: int, game_name: str, destination_folder: str) -> bool:
+    def restore_game_saves(
+        self, game_id: int, game_name: str, destination_folder: str
+    ) -> bool:
         """Restaura o save do repo para a pasta local configurada."""
         with self._lock:
             if not self.ensure_ready():
@@ -286,7 +293,9 @@ class SyncManager:
                 new_game_name,
                 self._current_sync_timestamp(),
             )
-            commit_paths.append(self._get_game_sync_meta_relative_path(game_id, new_game_name))
+            commit_paths.append(
+                self._get_game_sync_meta_relative_path(game_id, new_game_name)
+            )
 
             timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             return self.sync_paths(
@@ -395,9 +404,8 @@ class SyncManager:
 
         return {
             "synced": True,
-            "files": count_files(game_dir, None) - int(
-                os.path.isfile(os.path.join(game_dir, self.GAME_SYNC_META_FILENAME))
-            ),
+            "files": count_files(game_dir, None)
+            - int(os.path.isfile(os.path.join(game_dir, self.GAME_SYNC_META_FILENAME))),
             "size": self._directory_size_without_meta(game_dir),
         }
 
@@ -406,7 +414,9 @@ class SyncManager:
         return f"game_{game_id}"
 
     def _get_legacy_game_repo_dir(self, game_name: str) -> str:
-        return os.path.join(self._repo_path or "", "Saves", sanitize_filename(game_name))
+        return os.path.join(
+            self._repo_path or "", "Saves", sanitize_filename(game_name)
+        )
 
     def _get_game_repo_dir(self, game_id: int, game_name: str) -> str:
         target_dir = os.path.join(
@@ -431,7 +441,9 @@ class SyncManager:
             self.GAME_SYNC_META_FILENAME,
         )
 
-    def _write_game_sync_meta(self, game_id: int, game_name: str, synced_at: str) -> bool:
+    def _write_game_sync_meta(
+        self, game_id: int, game_name: str, synced_at: str
+    ) -> bool:
         meta_path = os.path.join(
             self._repo_path,
             self._get_game_sync_meta_relative_path(game_id, game_name),
@@ -491,7 +503,9 @@ class SyncManager:
                 src_file = os.path.join(dirpath, fname)
                 dst_file = os.path.join(dest_dir, fname)
 
-                if not os.path.exists(dst_file) or self._files_differ(src_file, dst_file):
+                if not os.path.exists(dst_file) or self._files_differ(
+                    src_file, dst_file
+                ):
                     shutil.copy2(src_file, dst_file)
                     changed = True
 
@@ -566,7 +580,9 @@ class SyncManager:
         repo_url = str(self.settings.get("github_repo_url", "") or "").strip()
         repo_name = str(self.settings.get("github_repo_name", "") or "").strip()
 
-        if self._looks_like_repo_url(repo_name) and not self._looks_like_repo_url(repo_url):
+        if self._looks_like_repo_url(repo_name) and not self._looks_like_repo_url(
+            repo_url
+        ):
             repo_url, repo_name = repo_name, repo_url
 
         repo_url = self._normalize_repo_url(repo_url)

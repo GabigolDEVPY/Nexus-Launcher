@@ -1,6 +1,7 @@
 """
 Tema QSS completo do NexusLauncher — estilo escuro, console, PS4/Steam.
 """
+
 from core.constants import FONT_DISPLAY, FONT_BODY
 
 STYLESHEET = f"""
@@ -58,10 +59,10 @@ QPushButton {{
 }}
 QPushButton:hover {{
     background-color: #252525;
-    border-color: #e8c547;
+    border-color: #1EA1FF;
 }}
 QPushButton:pressed {{
-    background-color: #e8c547;
+    background-color: #1EA1FF;
     color: #0d0d0d;
 }}
 QPushButton#playButton {{
@@ -98,7 +99,7 @@ QPushButton#favoriteButton {{
     padding: 4px;
 }}
 QPushButton#favoriteButton:hover {{
-    color: #e8c547;
+    color: #1EA1FF;
 }}
 
 /* ===== LABELS ===== */
@@ -115,7 +116,7 @@ QLabel#gameTitle {{
 }}
 QLabel#gameGenre {{
     font-size: 12px;
-    color: #e8c547;
+    color: #1EA1FF;
     letter-spacing: 2px;
     text-transform: uppercase;
 }}
@@ -135,7 +136,7 @@ QLabel#syncStatusLabel {{
 QLabel#sidebarTitle {{
     font-family: '{FONT_DISPLAY}', sans-serif;
     font-size: 28px;
-    color: #e8c547;
+    color: #1EA1FF;
     letter-spacing: 3px;
 }}
 
@@ -147,11 +148,11 @@ QLineEdit {{
     border-radius: 6px;
     padding: 10px 14px;
     font-size: 13px;
-    selection-background-color: #e8c547;
-    selection-color: #0d0d0d;
+    selection-background-color: #1EA1FF;
+    selection-color: #ffffff;
 }}
 QLineEdit:focus {{
-    border-color: #e8c547;
+    border-color: #1EA1FF;
 }}
 QLineEdit::placeholder {{
     color: #555;
@@ -177,7 +178,7 @@ QComboBox {{
     font-size: 13px;
 }}
 QComboBox:hover {{
-    border-color: #e8c547;
+    border-color: #1EA1FF;
 }}
 QComboBox::drop-down {{
     border: none;
@@ -186,8 +187,8 @@ QComboBox::drop-down {{
 QComboBox QAbstractItemView {{
     background-color: #1a1a1a;
     color: #e8e4dc;
-    selection-background-color: #e8c547;
-    selection-color: #0d0d0d;
+    selection-background-color: #1EA1FF;
+    selection-color: #ffffff;
     border: 1px solid #333;
 }}
 
@@ -204,8 +205,8 @@ QCheckBox::indicator {{
     background: #1a1a1a;
 }}
 QCheckBox::indicator:checked {{
-    background: #e8c547;
-    border-color: #e8c547;
+    background: #1EA1FF;
+    border-color: #1EA1FF;
 }}
 
 /* ===== TAB WIDGET ===== */
@@ -222,8 +223,8 @@ QTabBar::tab {{
     font-size: 13px;
 }}
 QTabBar::tab:selected {{
-    color: #e8c547;
-    border-bottom: 2px solid #e8c547;
+    color: #1EA1FF;
+    border-bottom: 2px solid #1EA1FF;
 }}
 QTabBar::tab:hover {{
     color: #fff;
@@ -236,7 +237,7 @@ QGroupBox {{
     margin-top: 12px;
     padding-top: 20px;
     font-weight: bold;
-    color: #e8c547;
+    color: #1EA1FF;
 }}
 QGroupBox::title {{
     subcontrol-origin: margin;
@@ -269,15 +270,15 @@ QMenu::item {{
     border-radius: 4px;
 }}
 QMenu::item:selected {{
-    background-color: #e8c547;
-    color: #0d0d0d;
+    background-color: #1EA1FF;
+    color: #ffffff;
 }}
 
 /* ===== TOOLTIP ===== */
 QToolTip {{
     background-color: #1a1a1a;
     color: #e8e4dc;
-    border: 1px solid #e8c547;
+    border: 1px solid #1EA1FF;
     padding: 6px;
     font-size: 12px;
 }}
@@ -291,7 +292,7 @@ QProgressBar {{
     text-align: center;
 }}
 QProgressBar::chunk {{
-    background-color: #e8c547;
+    background-color: #1EA1FF;
     border-radius: 4px;
 }}
 """

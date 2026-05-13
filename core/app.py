@@ -2,6 +2,7 @@
 Ciclo de vida da aplicação NexusLauncher.
 Inicializa banco, serviços, UI e encerra tudo de forma limpa.
 """
+
 import os
 from PySide6.QtWidgets import QSplashScreen
 from PySide6.QtGui import QPixmap, QColor, QPainter, QFont
@@ -9,8 +10,12 @@ from PySide6.QtCore import Qt
 
 from core.settings import Settings
 from core.constants import (
-    APP_DATA_DIR, CACHE_DIR, IMAGE_CACHE_DIR, ASSETS_DIR, LOG_DIR,
-    APP_NAME, APP_VERSION, WINDOW_WIDTH, WINDOW_HEIGHT,
+    APP_DATA_DIR,
+    CACHE_DIR,
+    IMAGE_CACHE_DIR,
+    ASSETS_DIR,
+    LOG_DIR,
+    APP_NAME,
     prepare_runtime_environment,
 )
 from database.db_manager import DatabaseManager
@@ -83,10 +88,10 @@ class NexusApp:
         pixmap = QPixmap(500, 300)
         pixmap.fill(QColor("#0d0d0d"))
         painter = QPainter(pixmap)
-        painter.setPen(QColor("#e8c547"))
+        painter.setPen(QColor("#1EA1FF"))
         font = QFont("Segoe UI", 28, QFont.Bold)
         painter.setFont(font)
-        painter.drawText(pixmap.rect(), Qt.AlignCenter, f"{APP_NAME}\nv{APP_VERSION}")
+        painter.drawText(pixmap.rect(), Qt.AlignCenter, APP_NAME)
         painter.end()
         splash = QSplashScreen(pixmap)
         splash.show()

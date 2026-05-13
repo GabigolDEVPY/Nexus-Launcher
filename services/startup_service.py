@@ -1,6 +1,7 @@
 """
 Servico para registrar o launcher na inicializacao do Windows.
 """
+
 import os
 import sys
 
@@ -42,7 +43,9 @@ class StartupService:
     def set_enabled(self, enabled: bool):
         if not self.supported:
             if enabled:
-                raise RuntimeError("Iniciar com o Windows so esta disponivel no Windows.")
+                raise RuntimeError(
+                    "Iniciar com o Windows so esta disponivel no Windows."
+                )
             return
 
         import winreg
@@ -68,7 +71,9 @@ class StartupService:
         if getattr(sys, "frozen", False):
             return f'"{os.path.abspath(sys.executable)}"'
 
-        script_arg = sys.argv[0] if sys.argv and sys.argv[0] not in {"", "-"} else "main.py"
+        script_arg = (
+            sys.argv[0] if sys.argv and sys.argv[0] not in {"", "-"} else "main.py"
+        )
         script_path = os.path.abspath(script_arg)
         if not os.path.isfile(script_path):
             script_path = os.path.join(BASE_DIR, "main.py")

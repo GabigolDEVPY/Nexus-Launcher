@@ -2,10 +2,9 @@
 Detector automático de jogos instalados no sistema.
 Varredura de pastas conhecidas e extração de metadados de executáveis.
 """
+
 import os
-import re
 import winreg
-import struct
 from pathlib import Path
 from typing import List, Dict, Optional
 from utils.logger import get_logger
@@ -69,11 +68,21 @@ class GameDetector:
 
             # Pula diretórios irrelevantes
             dirnames[:] = [
-                d for d in dirnames
-                if d.lower() not in {
-                    "__pycache__", ".git", "node_modules", "redist",
-                    "redistributable", "_commonredist", "directx",
-                    "dotnet", "vcredist", "support", "unins000",
+                d
+                for d in dirnames
+                if d.lower()
+                not in {
+                    "__pycache__",
+                    ".git",
+                    "node_modules",
+                    "redist",
+                    "redistributable",
+                    "_commonredist",
+                    "directx",
+                    "dotnet",
+                    "vcredist",
+                    "support",
+                    "unins000",
                 }
             ]
 
@@ -82,10 +91,20 @@ class GameDetector:
                     full_path = os.path.join(dirpath, f)
                     # Filtra desinstaladores e utilitários
                     fname_lower = f.lower()
-                    if any(skip in fname_lower for skip in [
-                        "unins", "uninstall", "setup", "installer",
-                        "crash", "report", "helper", "updater", "patcher",
-                    ]):
+                    if any(
+                        skip in fname_lower
+                        for skip in [
+                            "unins",
+                            "uninstall",
+                            "setup",
+                            "installer",
+                            "crash",
+                            "report",
+                            "helper",
+                            "updater",
+                            "patcher",
+                        ]
+                    ):
                         continue
 
                     yield {
@@ -116,14 +135,17 @@ class GameDetector:
                         if install_loc and os.path.isdir(install_loc):
                             exe = self._find_main_exe(install_loc)
                             if exe:
-                                games.append({
-                                    "path": exe,
-                                    "name": display_name or self._guess_name(
-                                        os.path.basename(exe), install_loc
-                                    ),
-                                    "folder": install_loc,
-                                    "icon": icon_path,
-                                })
+                                games.append(
+                                    {
+                                        "path": exe,
+                                        "name": display_name
+                                        or self._guess_name(
+                                            os.path.basename(exe), install_loc
+                                        ),
+                                        "folder": install_loc,
+                                        "icon": icon_path,
+                                    }
+                                )
                         winreg.CloseKey(subkey)
                     except (OSError, ValueError):
                         continue

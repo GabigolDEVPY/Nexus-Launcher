@@ -1,6 +1,7 @@
 """
 Constantes globais do NexusLauncher.
 """
+
 import ctypes
 import os
 import shutil
@@ -119,14 +120,30 @@ MAX_COMMIT_MESSAGE_LEN = 200
 
 # Extensoes de save conhecidas
 SAVE_EXTENSIONS = {
-    ".sav", ".save", ".dat", ".json", ".xml", ".ini",
-    ".cfg", ".conf", ".profile", ".slot", ".esm", ".ess",
+    ".sav",
+    ".save",
+    ".dat",
+    ".json",
+    ".xml",
+    ".ini",
+    ".cfg",
+    ".conf",
+    ".profile",
+    ".slot",
+    ".esm",
+    ".ess",
 }
 
 # Ignorar no monitoramento
 IGNORE_PATTERNS = {
-    "*.tmp", "*.temp", "~*", "*.lock", "Thumbs.db",
-    ".DS_Store", "*.part", "*.crdownload",
+    "*.tmp",
+    "*.temp",
+    "~*",
+    "*.lock",
+    "Thumbs.db",
+    ".DS_Store",
+    "*.part",
+    "*.crdownload",
 }
 
 # Play tracker

@@ -1,6 +1,7 @@
 """
 Gerenciador de configurações persistido em JSON.
 """
+
 import json
 import os
 from typing import Any
@@ -84,7 +85,9 @@ class Settings:
         repo_name = str(self._data.get("github_repo_name", "") or "").strip()
         changed = False
 
-        if self._looks_like_repo_url(repo_name) and not self._looks_like_repo_url(repo_url):
+        if self._looks_like_repo_url(repo_name) and not self._looks_like_repo_url(
+            repo_url
+        ):
             repo_url, repo_name = repo_name, repo_url
             changed = True
 

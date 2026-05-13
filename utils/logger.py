@@ -1,6 +1,7 @@
 """
 Sistema de logging centralizado.
 """
+
 import logging
 import os
 import sys
@@ -10,9 +11,7 @@ from core.constants import LOG_DIR, prepare_runtime_environment
 prepare_runtime_environment()
 os.makedirs(LOG_DIR, exist_ok=True)
 
-_log_file = os.path.join(
-    LOG_DIR, f"nexus_{datetime.now().strftime('%Y%m%d')}.log"
-)
+_log_file = os.path.join(LOG_DIR, f"nexus_{datetime.now().strftime('%Y%m%d')}.log")
 
 
 def get_logger(name: str) -> logging.Logger:
