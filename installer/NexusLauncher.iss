@@ -1,5 +1,5 @@
 #ifndef MyAppVersion
-  #define MyAppVersion "1.0.0"
+  #define MyAppVersion "1.0.1"
 #endif
 
 #define MyAppName "NexusLauncher"
@@ -8,8 +8,8 @@
 #define MyBuildDir "..\dist\NexusLauncher"
 #define MyOutputDir "..\dist-installer"
 
-#ifexist "..\assets\app.ico"
-  #define MyInstallerIcon "..\assets\app.ico"
+#ifexist "..\icon.ico"
+  #define MyInstallerIcon "..\icon.ico"
 #endif
 
 [Setup]
@@ -20,6 +20,7 @@ AppPublisher={#MyAppPublisher}
 DefaultDirName={localappdata}\Programs\{#MyAppName}
 DefaultGroupName={#MyAppName}
 DisableProgramGroupPage=yes
+DisableDirPage=no
 PrivilegesRequired=lowest
 OutputDir={#MyOutputDir}
 OutputBaseFilename=NexusLauncher-Setup-{#MyAppVersion}

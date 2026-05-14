@@ -5,7 +5,7 @@ from PyInstaller.utils.hooks import collect_submodules
 
 
 project_root = Path(SPECPATH).resolve()
-icon_path = project_root / "assets" / "app.ico"
+icon_path = project_root / "icon.ico"
 
 datas = []
 for relative_dir in ["assets", "ui/resources", "vendor/PortableGit"]:

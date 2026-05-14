@@ -8,7 +8,7 @@ import shutil
 import sys
 
 APP_NAME = "NexusLauncher"
-APP_VERSION = "1.0.0"
+APP_VERSION = "1.0.1"
 
 # Diretorios de codigo e recursos
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
