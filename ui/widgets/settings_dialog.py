@@ -86,7 +86,7 @@ class SettingsDialog(QDialog):
         self._token.setEchoMode(QLineEdit.Password)
         form.addRow("Token GitHub:", self._token)
 
-        self._sync_enabled = QCheckBox("Ativar sincronizacao automatica")
+        self._sync_enabled = QCheckBox("Ativar sincronizacao de saves")
         self._sync_enabled.setChecked(self.settings.get("save_sync_enabled", False))
         form.addRow("", self._sync_enabled)
 

@@ -1,6 +1,8 @@
 """
 Monitoramento de pastas de save em tempo real usando Watchdog.
-Detecta alteracoes, cria commits e faz push automatico.
+Detecta alteracoes e atualiza as estatisticas locais de save.
+Nao dispara sincronizacao com o GitHub: o sync acontece no maximo 1x por dia
+ou pelo botao Sync da interface.
 """
 
 import os
@@ -149,11 +151,7 @@ class SaveWatcher(QObject):
         logger.debug(f"Watch adicionado: {game_name} -> {save_folder}")
 
     def _on_debounced_change(self, game_id: int, game_name: str):
-        """Callback apos debounce para sincronizar com GitHub."""
-        if not self.sync_manager.settings.get("save_sync_enabled", False):
-            logger.info("Sincronizacao ignorada porque o sync global esta desativado")
-            return
-
+        """Callback apos debonce para atualizar estatisticas de save."""
         logger.info(f"Alteracao detectada em saves de '{game_name}'")
 
         with self.db.session() as sess:
@@ -161,16 +159,15 @@ class SaveWatcher(QObject):
                 sess.query(SaveProfileModel)
                 .filter_by(
                     game_id=game_id,
-                    sync_enabled=True,
                 )
                 .first()
             )
-            if not profile:
+            if not profile or not profile.save_folder:
                 return
 
             save_folder = profile.save_folder
             profile.file_count = count_files(save_folder)
             profile.total_size_bytes = get_directory_size(save_folder)
 
-        self.sync_started.emit(game_id)
-        self.sync_requested.emit(game_id, game_name)
+        # Apenas notifica que as estatisticas locais mudaram (para atualizar a UI)
+        self.sync_completed.emit(game_id)

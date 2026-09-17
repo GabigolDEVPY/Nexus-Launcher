@@ -8,7 +8,7 @@ import shutil
 import sys
 
 APP_NAME = "NexusLauncher"
-APP_VERSION = "1.0.1"
+APP_VERSION = "1.1.0"
 
 # Diretorios de codigo e recursos
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -115,8 +115,11 @@ RAWG_API_URL = "https://api.rawg.io/api"
 STEAMGRIDDB_API_URL = "https://www.steamgriddb.com/api/v2"
 
 # Save sync
-SAVE_SYNC_DEBOUNCE_MS = 3000  # debounce antes de commitar
+SAVE_SYNC_DEBOUNCE_MS = 3000  # debounce para atualizar estatisticas de save
 MAX_COMMIT_MESSAGE_LEN = 200
+
+# O estado do launcher vai para o GitHub no maximo 1x por dia (ou pelo botao Sync)
+USER_STATE_SYNC_INTERVAL_S = 24 * 60 * 60
 
 # Extensoes de save conhecidas
 SAVE_EXTENSIONS = {

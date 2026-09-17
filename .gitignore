@@ -4,21 +4,17 @@ __pycache__/
 *.pyd
 *.pyo
 *.so
-vendor
-/vendor
+
 # Virtual environment
 .venv/
 venv/
-BUILD_INSTRUCTIONS.md
-build_release.ps1
-/build_release.ps1
-BUILD_WINDOWS.md
+
 # IDE / editor
 .vscode/
 .idea/
 *.code-workspace
 
-# Local runtime data
+# Runtime data (dados reais do usuario, ficam fora do git)
 config.json
 nexus.db
 nexus.db-shm
@@ -30,7 +26,6 @@ logs/
 # Build output
 build/
 dist/
-dist-installer/
 *.spec.bak
 
 # OS files
@@ -41,13 +36,9 @@ Thumbs.db
 .env
 .env.*
 
-# Test and coverage
+# Test, lint and coverage caches
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
 .coverage
 htmlcov/
-
-# Portable Git binaries
-vendor/PortableGit/
-!vendor/README.md

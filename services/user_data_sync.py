@@ -29,7 +29,6 @@ class UserDataSyncService:
         "github_repo_url",
         "github_repo_name",
         "save_sync_enabled",
-        "save_watch_interval_s",
         "theme",
         "language",
         "auto_fetch_metadata",
@@ -38,7 +37,6 @@ class UserDataSyncService:
         "save_sync_profiles_migrated",
         "pending_save_restore_game_ids",
         "last_selected_game_id",
-        "window_geometry",
     ]
 
     def __init__(

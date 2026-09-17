@@ -1,117 +1,80 @@
 # NexusLauncher
 
-Launcher de jogos para Windows com biblioteca local, rastreamento de horas e sincronizacao de saves e dados do usuario com GitHub.
+Game launcher portatil para Windows com biblioteca local, rastreamento de horas e sincronizacao de saves e dados do usuario com o GitHub.
 
-## O que o launcher faz
+## Como funciona
 
-- Organiza seus jogos em uma biblioteca local.
-- Permite adicionar capa, descricao e outros metadados automaticamente.
-- Monitora tempo de jogo.
-- Sincroniza saves com GitHub.
-- Sincroniza tambem os dados do launcher, como jogos adicionados, horas jogadas e configuracoes.
+- **Portatil e onefile**: o build gera um unico `NexusLauncher.exe`. Nao ha instalador: basta copiar o exe e executar.
+- **Zero dependencias externas**: nao precisa de Git, Python ou qualquer outra coisa instalada. A sincronizacao usa a API oficial do GitHub por HTTPS, direto de dentro do app.
+- **Instancia unica**: abrir o exe de novo nao cria uma segunda copia; a janela ja aberta e trazida para frente.
+- **Fica em segundo plano**: ao fechar, o launcher continua na bandeja do sistema (indice ao lado do relogio). Para sair de verdade, use o menu da bandeja.
 
 ## Onde os dados ficam salvos
 
-O launcher salva os dados do usuario em:
+Os dados do usuario ficam em `Documentos\NexusLauncher`:
 
-`Documentos\NexusLauncher`
-
-Ali ficam:
-
-- banco local
-- configuracoes
-- cache
-- logs
+- banco local (`nexus.db`)
+- configuracoes (`config.json`)
+- cache de imagens, saves e logs
 
 ## Como usar
 
 ### 1. Abrir o launcher
 
-Abra o `NexusLauncher.exe` instalado normalmente pelo setup.
+Execute o `NexusLauncher.exe`. Nao precisa instalar nada.
 
 ### 2. Adicionar um jogo
 
 1. Clique em `+ Adicionar`.
 2. Selecione o executavel do jogo.
-3. Ajuste o nome se quiser.
-4. Se souber onde o jogo salva o progresso, informe a pasta de save.
-5. Confirme.
+3. Se souber onde o jogo salva o progresso, informe a pasta de save.
+4. Confirme.
 
 ### 3. Configurar sincronizacao com GitHub
 
 1. Clique em `Config`.
-2. Preencha o token do GitHub.
-3. Preencha a URL do repositorio.
-4. Ative `GitHub Sync`.
+2. Preencha o token do GitHub (precisa de permissao de escrita no repositorio).
+3. Preencha a URL do repositorio, por exemplo `https://github.com/seu-usuario/seu-repo.git`.
+4. Ative `Ativar sincronizacao de saves`.
 5. Salve.
 
-Exemplo de URL:
+Use um repositorio **privado** e guarde o token com cuidado.
 
-`https://github.com/seu-usuario/seu-repo.git`
+### 4. Sincronizar
 
-## Configurar um jogo depois de adicionar
+O launcher envia os dados para o GitHub de duas formas:
 
-Selecione o jogo e use o botao `CONFIG`.
+- **Automatico, no maximo 1x por dia** (estado do launcher: jogos, horas jogadas e configuracoes).
+- **Botao `Sync` no topo**, quando voce quiser sincronizar agora: envia o estado do launcher e os saves de todos os jogos com sync ativado.
 
-Ali voce pode:
+Tambem e possivel sincronizar um jogo especifico pelo `CONFIG` do jogo (`Salvar e Sincronizar Agora`).
 
-- mudar o nome do jogo
-- trocar o executavel
-- mudar a pasta de save
-- ativar ou desativar o sync daquele jogo
-- usar `Salvar e Sincronizar Agora`
+Mudancas nos arquivos de save **nao** disparam sync sozinhas; o sync acontece no ritmo descrito acima.
 
-Se voce mudar o nome do jogo, o launcher tenta atualizar tambem os metadados dele.
+## Restaurar depois de formatar o PC
 
-## Como o sync funciona
+1. Execute o launcher novo.
+2. Configure o mesmo token e a mesma URL do repositorio.
+3. O launcher puxa do GitHub e reconstrui a biblioteca, as horas e as configuracoes.
+4. Se existir save no GitHub e nao existir no PC, ele e restaurado automaticamente.
 
-- Ao abrir o launcher, ele tenta sincronizar os dados do usuario.
-- Os dados do launcher tambem sao sincronizados periodicamente.
-- Se existir save no GitHub e nao existir save local, o launcher restaura o save para a maquina.
-- Se local e GitHub tiverem saves diferentes na primeira sincronizacao, o launcher pergunta antes de sobrescrever.
-- Depois que aquela maquina ja estiver sincronizada, os saves locais podem ser enviados normalmente.
+## Sobre conflitos de save
 
-## Mudou a pasta de save do jogo?
+Se o save local e o do GitHub estiverem diferentes, o launcher pergunta antes de sobrescrever (enviar o local ou baixar o remoto). No botao `Sync` global, jogos em conflito sao ignorados e informados, para nao sobrescrever nada sem voce ver.
 
-Se voce reinstalou o jogo, mudou de plataforma, ou o jogo passou a usar outra pasta de save:
+## Desenvolvimento
 
-1. Abra o `CONFIG` do jogo.
-2. Salve o novo caminho da pasta de save.
-3. Abra o jogo uma vez para ele criar a estrutura nova.
-4. Feche o jogo.
-5. O launcher aplica o save do GitHub nessa nova pasta.
+```powershell
+python -m venv .venv
+.venv\Scripts\pip install -r requirements.txt
+.venv\Scripts\python main.py
+```
 
-## Restaurar tudo depois de formatar o PC
+### Build do exe portatil
 
-Se o repositorio do GitHub ja estiver configurado e sincronizado:
+```powershell
+.venv\Scripts\pip install -r requirements-build.txt
+powershell -File build_release.ps1
+```
 
-1. Instale o launcher.
-2. Abra o launcher.
-3. Configure o token e a URL do repositorio.
-4. O launcher puxa os dados do GitHub e reconstrui a biblioteca local.
-
-## Dicas importantes
-
-- Use um repositorio privado no GitHub.
-- Guarde seu token com cuidado.
-- Se voce trocar o token, atualize no launcher.
-- Se o save local sumir, o launcher pode restaurar do GitHub se ele ja tiver sido sincronizado antes.
-
-## Problemas comuns
-
-### O jogo nao sincronizou
-
-Confira:
-
-- se o token do GitHub esta correto
-- se a URL do repositorio esta correta
-- se a pasta de save do jogo esta configurada
-- se o sync global esta ativo
-
-### O jogo cria save em outra pasta
-
-Atualize a pasta no `CONFIG` do jogo e abra o jogo uma vez para ele criar a estrutura nova.
-
-## Observacao
-
-O launcher usa Git no processo de sincronizacao. No build de producao, ele pode sair com `PortableGit` embutido no instalador, sem depender de Git instalado manualmente no Windows.
+O resultado fica em `dist\NexusLauncher.exe`.

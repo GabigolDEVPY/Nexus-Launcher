@@ -19,17 +19,15 @@ class Settings:
         "rawg_api_key": "",
         "steamgriddb_api_key": "",
         "save_sync_enabled": False,
-        "save_watch_interval_s": 2,
         "theme": "dark",
         "language": "pt-BR",
         "auto_fetch_metadata": True,
-        "minimize_to_tray": False,
+        "minimize_to_tray": True,
         "start_with_windows": False,
         "save_sync_profiles_migrated": False,
         "pending_save_restore_game_ids": [],
         "user_state_last_synced_at": "",
         "last_selected_game_id": None,
-        "window_geometry": None,
     }
 
     def __new__(cls):

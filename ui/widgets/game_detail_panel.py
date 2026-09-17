@@ -160,6 +160,7 @@ class GameDetailPanel(QWidget):
     play_requested = Signal(int)
     favorite_toggled = Signal(int)
     settings_requested = Signal(int)
+    sync_now_requested = Signal(int)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -313,6 +314,40 @@ class GameDetailPanel(QWidget):
         self._fav_btn.clicked.connect(self._on_toggle_favorite)
         actions.addWidget(self._fav_btn)
 
+        self._sync_btn = QPushButton("SINCRONIZAR")
+        self._sync_btn.setToolTip("Sincronizar saves deste jogo com o GitHub agora")
+        self._sync_btn.setFixedSize(148, 54)
+        self._sync_btn.clicked.connect(self._on_sync_now)
+        self._sync_btn.setStyleSheet(
+            """
+            QPushButton {
+                background: rgba(30, 161, 255, 0.12);
+                color: #1EA1FF;
+                border: 1px solid rgba(30, 161, 255, 0.28);
+                border-radius: 27px;
+                font-family: 'Segoe UI';
+                font-size: 11px;
+                font-weight: 700;
+                letter-spacing: 2px;
+                padding: 0 22px;
+            }
+            QPushButton:hover {
+                background: rgba(30, 161, 255, 0.22);
+                border-color: rgba(30, 161, 255, 0.45);
+                color: white;
+            }
+            QPushButton:pressed {
+                background: rgba(30, 161, 255, 0.30);
+            }
+            QPushButton:disabled {
+                background: rgba(255, 255, 255, 0.02);
+                color: rgba(255, 255, 255, 0.2);
+                border-color: rgba(255, 255, 255, 0.05);
+            }
+            """
+        )
+        actions.addWidget(self._sync_btn)
+
         self._config_btn = QPushButton("CONFIG")
         self._config_btn.setToolTip(
             "Editar executavel, pasta de saves e sync deste jogo"
@@ -414,6 +449,7 @@ class GameDetailPanel(QWidget):
         self._platform_value.setText(game.platform or "PC")
         self._set_sync_style("Checando...", "#9AA4B2")
         self._set_favorite_state(game.is_favorite)
+        self._sync_btn.setEnabled(bool(game.save_folder))
         self.set_play_button_state("JOGAR", True)
         self.set_metadata_status("")
 
@@ -543,6 +579,10 @@ class GameDetailPanel(QWidget):
     def _on_config(self):
         if self._current_game:
             self.settings_requested.emit(self._current_game.id)
+
+    def _on_sync_now(self):
+        if self._current_game:
+            self.sync_now_requested.emit(self._current_game.id)
 
     def resizeEvent(self, event):
         super().resizeEvent(event)

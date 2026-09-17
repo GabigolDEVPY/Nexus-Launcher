@@ -18,6 +18,7 @@ from core.constants import (
     APP_NAME,
     prepare_runtime_environment,
 )
+from core.single_instance import SingleInstanceGuard
 from database.db_manager import DatabaseManager
 from services.notification_service import NotificationService
 from services.play_tracker import PlayTracker
@@ -33,8 +34,9 @@ from ui.main_window import MainWindow
 class NexusApp:
     """Orquestra inicialização e encerramento de todos os subsistemas."""
 
-    def __init__(self, qapp):
+    def __init__(self, qapp, guard: SingleInstanceGuard):
         self.qapp = qapp
+        self.guard = guard
         prepare_runtime_environment()
         self.settings = Settings()
         self._ensure_dirs()
@@ -79,6 +81,9 @@ class NexusApp:
             startup_service=self.startup_service,
         )
 
+        # Uma segunda instancia pede para mostrar a janela existente
+        self.guard.activate_requested.connect(self._activate_main_window)
+
     def _ensure_dirs(self):
         for d in [APP_DATA_DIR, CACHE_DIR, IMAGE_CACHE_DIR, LOG_DIR, ASSETS_DIR]:
             os.makedirs(d, exist_ok=True)
@@ -100,17 +105,20 @@ class NexusApp:
 
     def start(self):
         """Mostra a janela principal e encerra o splash."""
+        self.guard.start_listening()
         self.play_tracker.start()
         self.save_watcher.start_all()
 
         self.main_window.showMaximized()
         self._splash.finish(self.main_window)
 
+    def _activate_main_window(self):
+        self.main_window._restore_from_tray()
+
     def shutdown(self):
         """Encerra todos os serviços de forma limpa."""
         self.save_watcher.stop_all()
         self.play_tracker.stop()
-        self.user_data_sync.sync_now("encerramento do launcher", notify=False)
         self.sync_manager.shutdown()
         self.settings.save()
         self.db.close()

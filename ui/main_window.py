@@ -45,7 +45,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from core.constants import APP_NAME
+from core.constants import APP_NAME, APP_VERSION, USER_STATE_SYNC_INTERVAL_S
 from database.models import Game as GameModel, SaveProfile as SaveProfileModel
 from models.game import GameData
 from ui.styles.theme import STYLESHEET
@@ -285,8 +285,8 @@ class MainWindow(QMainWindow):
         self._metadata_thread = None
         self._metadata_target_game_id: Optional[int] = None
         self._metadata_attempted_ids: set[int] = set()
-        self._startup_sync_game_ids: list[int] = []
         self._user_state_dirty = False
+        self._global_sync_running = False
         self._allow_exit = False
         self._tray_available = QSystemTrayIcon.isSystemTrayAvailable()
         self._tray_icon = None
@@ -302,9 +302,11 @@ class MainWindow(QMainWindow):
         self._bg_anim.setDuration(850)
         self._bg_anim.setEasingCurve(QEasingCurve.InOutCubic)
 
+        # Verifica 1x por hora se ja passou 24h desde o ultimo sync de estado;
+        # o push real acontece no maximo 1x por dia ou pelo botao Sync.
         self._user_state_timer = QTimer(self)
-        self._user_state_timer.setInterval(30 * 60 * 1000)
-        self._user_state_timer.timeout.connect(self._flush_user_state_periodic)
+        self._user_state_timer.setInterval(60 * 60 * 1000)
+        self._user_state_timer.timeout.connect(self._check_daily_user_state_sync)
 
         self._migrate_legacy_save_sync_profiles()
         self._build_ui()
@@ -312,10 +314,8 @@ class MainWindow(QMainWindow):
         self._setup_tray()
         self._connect_signals()
         self._load_games()
-        self._restore_missing_local_saves_from_repo()
-        self._run_startup_syncs()
         self._user_state_timer.start()
-        self._flush_user_state("abertura do launcher", notify=True, force=True)
+        self._check_daily_user_state_sync()
 
     def _get_bg_progress(self):
         return self._bg_t
@@ -417,8 +417,7 @@ class MainWindow(QMainWindow):
         add_btn = QPushButton("+  Adicionar")
         add_btn.setFixedSize(132, 38)
         add_btn.clicked.connect(self._add_game)
-        add_btn.setStyleSheet(
-            """
+        top_bar_button_style = """
             QPushButton {
                 background: rgba(255,255,255,0.08);
                 color: white;
@@ -436,14 +435,27 @@ class MainWindow(QMainWindow):
             QPushButton:pressed {
                 background: rgba(255,255,255,0.20);
             }
-            """
-        )
+            QPushButton:disabled {
+                color: rgba(255,255,255,0.30);
+                background: rgba(255,255,255,0.04);
+            }
+        """
+        add_btn.setStyleSheet(top_bar_button_style)
         top_layout.addWidget(add_btn)
+
+        self._sync_btn = QPushButton("Sync")
+        self._sync_btn.setFixedSize(92, 38)
+        self._sync_btn.setToolTip(
+            "Sincroniza agora: dados do launcher + saves de todos os jogos configurados"
+        )
+        self._sync_btn.clicked.connect(self._on_global_sync_requested)
+        self._sync_btn.setStyleSheet(top_bar_button_style)
+        top_layout.addWidget(self._sync_btn)
 
         config_btn = QPushButton("Config")
         config_btn.setFixedSize(106, 38)
         config_btn.clicked.connect(self._open_settings)
-        config_btn.setStyleSheet(add_btn.styleSheet())
+        config_btn.setStyleSheet(top_bar_button_style)
         top_layout.addWidget(config_btn)
 
         self._clock_label = QLabel()
@@ -641,6 +653,7 @@ class MainWindow(QMainWindow):
         self._detail_panel.play_requested.connect(self._on_play)
         self._detail_panel.favorite_toggled.connect(self._on_toggle_favorite)
         self._detail_panel.settings_requested.connect(self._on_game_settings)
+        self._detail_panel.sync_now_requested.connect(self._on_manual_sync_requested)
 
         self.notification_service.toast_requested.connect(self._toast.show_toast)
 
@@ -648,7 +661,6 @@ class MainWindow(QMainWindow):
         self.play_tracker.game_closed.connect(self._on_game_closed)
         self.play_tracker.playtime_updated.connect(self._on_playtime_updated)
 
-        self.save_watcher.sync_requested.connect(self._on_watcher_sync_requested)
         self.save_watcher.sync_completed.connect(self._on_sync_done)
 
     def _load_games(self):
@@ -897,16 +909,6 @@ class MainWindow(QMainWindow):
             f"Configuracoes de '{data['name']}' atualizadas."
         )
 
-        should_sync_after_save = (
-            bool(data["save_folder"])
-            and data["sync_enabled"]
-            and global_sync_enabled
-            and not save_folder_changed
-            and (
-                previous_save_folder != data["save_folder"] or not previous_sync_enabled
-            )
-        )
-
         if save_folder_changed and has_remote_save:
             self._mark_pending_restore(game_id)
             self.notification_service.info(
@@ -918,8 +920,6 @@ class MainWindow(QMainWindow):
 
         if dialog.sync_now_requested:
             self._sync_game_now(game_id, force=True)
-        elif should_sync_after_save:
-            self._sync_game_now(game_id)
 
         self._sync_user_state(f"configuracoes atualizadas do jogo {game_id}")
         if name_changed:
@@ -941,19 +941,72 @@ class MainWindow(QMainWindow):
                 )
         self._sync_user_state(f"save sync concluido para o jogo {game_id}")
 
-    def _on_watcher_sync_requested(self, game_id: int, game_name: str):
-        success = self._sync_game_now(
+    def _on_manual_sync_requested(self, game_id: int):
+        self._sync_game_now(
             game_id,
-            notify=False,
+            force=True,
+            notify=True,
             allow_conflict_prompt=True,
         )
-        if success:
-            self.save_watcher.sync_completed.emit(game_id)
-        else:
-            self.save_watcher.sync_error.emit(game_id, "Falha na sincronizacao")
-            self.notification_service.error(
-                f"Erro ao sincronizar saves de '{game_name}'"
+
+    def _on_global_sync_requested(self):
+        """Botao Sync do topo: estado do launcher + saves de todos os jogos ativados."""
+        if self._global_sync_running:
+            return
+
+        if not self.sync_manager.is_configured():
+            self.notification_service.warning(
+                "Configure o token e o repositorio do GitHub em Config antes de sincronizar."
             )
+            return
+
+        self._global_sync_running = True
+        self._sync_btn.setEnabled(False)
+        self._sync_btn.setText("...")
+        try:
+            self._flush_user_state(
+                "sync manual do launcher", notify=False, force=True
+            )
+
+            with self.db.session() as sess:
+                rows = (
+                    sess.query(GameModel.id)
+                    .join(SaveProfileModel, SaveProfileModel.game_id == GameModel.id)
+                    .filter(
+                        SaveProfileModel.save_folder != "",
+                        SaveProfileModel.sync_enabled.is_(True),
+                    )
+                    .all()
+                )
+                game_ids = [row.id for row in rows]
+
+            synced_count = 0
+            for game_id in game_ids:
+                try:
+                    if self._sync_game_now(
+                        game_id,
+                        force=True,
+                        notify=False,
+                        allow_conflict_prompt=False,
+                    ):
+                        synced_count += 1
+                except Exception as e:
+                    logger.error(f"Erro ao sincronizar jogo {game_id}: {e}")
+
+            skipped_count = len(game_ids) - synced_count
+            if skipped_count:
+                self.notification_service.warning(
+                    f"Sync concluido: {synced_count} jogo(s) enviado(s), "
+                    f"{skipped_count} precisam de atencao (conflito ou pasta vazia)."
+                )
+            else:
+                self.notification_service.success(
+                    f"Sync concluido: {synced_count} jogo(s) sincronizado(s)."
+                )
+        finally:
+            self._global_sync_running = False
+            self._sync_btn.setEnabled(True)
+            self._sync_btn.setText("Sync")
 
     def _add_game(self):
         dialog = AddGameDialog(self.metadata_service, self.image_service, self)
@@ -1011,9 +1064,6 @@ class MainWindow(QMainWindow):
         self._load_games()
         self.notification_service.success(f"'{data['name']}' adicionado a biblioteca!")
 
-        if data.get("save_folder") and self.settings.get("save_sync_enabled", False):
-            self._sync_game_now(game_id)
-
         self._sync_user_state(f"novo jogo adicionado: {data['name']}")
 
     def _on_search(self, text: str):
@@ -1070,26 +1120,8 @@ class MainWindow(QMainWindow):
             for profile in profiles:
                 if profile.save_folder and not profile.sync_enabled:
                     profile.sync_enabled = True
-                    self._startup_sync_game_ids.append(profile.game_id)
 
         self.settings.set("save_sync_profiles_migrated", True)
-
-    def _run_startup_syncs(self):
-        if not self._startup_sync_game_ids:
-            return
-
-        pending_ids = self._get_pending_restore_ids()
-        synced_count = 0
-        for game_id in self._startup_sync_game_ids:
-            if game_id in pending_ids:
-                continue
-            if self._sync_game_now(game_id, notify=False):
-                synced_count += 1
-
-        self._startup_sync_game_ids.clear()
-        self.notification_service.info(
-            f"Sync inicial executado para {synced_count} jogo(s) legado(s) com saves configurados."
-        )
 
     def _refresh_save_watch(self, game_id: int, save_folder: str, sync_enabled: bool):
         self.save_watcher.remove_game_watch(game_id)
@@ -1129,7 +1161,14 @@ class MainWindow(QMainWindow):
             last_synced = profile.last_synced
 
         if not os.path.isdir(save_folder):
-            os.makedirs(save_folder, exist_ok=True)
+            try:
+                os.makedirs(save_folder, exist_ok=True)
+            except OSError as e:
+                if notify:
+                    self.notification_service.warning(
+                        f"Pasta de saves invalida para '{game_name}': {e}"
+                    )
+                return False
 
         if not self.settings.get("github_repo_url") or not self.settings.get(
             "github_token"
@@ -1176,8 +1215,14 @@ class MainWindow(QMainWindow):
             and comparison["local_exists"]
             and not comparison["identical"]
             and not comparison["can_upload_without_prompt"]
-            and allow_conflict_prompt
         ):
+            if not allow_conflict_prompt:
+                self.notification_service.warning(
+                    f"'{game_name}' tem saves diferentes no PC e no GitHub. "
+                    "Resolva pelo CONFIG do jogo antes de sincronizar."
+                )
+                return False
+
             decision = self._ask_save_conflict_resolution(game_name, comparison)
             if decision == "remote":
                 return self._restore_game_saves_locally(
@@ -1225,53 +1270,6 @@ class MainWindow(QMainWindow):
                 f"Saves de '{game_name}' sincronizados com o GitHub."
             )
         return True
-
-    def _restore_missing_local_saves_from_repo(self):
-        if not self.settings.get("save_sync_enabled", False):
-            return
-        if not self.sync_manager.is_configured():
-            return
-        if not self.sync_manager.refresh_from_remote():
-            return
-
-        restored_count = 0
-        with self.db.session() as sess:
-            rows = (
-                sess.query(GameModel, SaveProfileModel)
-                .join(SaveProfileModel, SaveProfileModel.game_id == GameModel.id)
-                .filter(SaveProfileModel.sync_enabled.is_(True))
-                .all()
-            )
-
-        pending_ids = self._get_pending_restore_ids()
-        for game, profile in rows:
-            if not profile.save_folder:
-                continue
-            if game.id in pending_ids:
-                continue
-
-            comparison = self.sync_manager.compare_game_saves(
-                game.id,
-                game.name,
-                profile.save_folder,
-                profile.last_synced,
-            )
-            if comparison["repo_exists"] and not comparison["local_exists"]:
-                if self._restore_game_saves_locally(
-                    game.id,
-                    game.name,
-                    profile.save_folder,
-                    profile.sync_enabled,
-                    notify=False,
-                    reload_after=False,
-                ):
-                    restored_count += 1
-
-        if restored_count:
-            self._load_games()
-            self.notification_service.success(
-                f"{restored_count} save(s) foram restaurados automaticamente do GitHub."
-            )
 
     def _restore_game_saves_locally(
         self,
@@ -1414,7 +1412,6 @@ class MainWindow(QMainWindow):
 
     def _apply_global_sync_setting(self, enabled: bool):
         profiles_data = []
-        game_ids_to_sync = []
 
         with self.db.session() as sess:
             profiles = sess.query(SaveProfileModel).all()
@@ -1424,23 +1421,10 @@ class MainWindow(QMainWindow):
                 profiles_data.append(
                     (profile.game_id, profile.save_folder, profile.sync_enabled)
                 )
-                if enabled and has_save_folder:
-                    game_ids_to_sync.append(profile.game_id)
 
         for game_id, save_folder, sync_enabled in profiles_data:
             self._refresh_save_watch(game_id, save_folder, sync_enabled)
 
-        if not enabled or not game_ids_to_sync:
-            return
-
-        synced_count = 0
-        for game_id in game_ids_to_sync:
-            if self._sync_game_now(game_id, notify=False):
-                synced_count += 1
-
-        self.notification_service.info(
-            f"Sync inicial executado para {synced_count} de {len(game_ids_to_sync)} jogos configurados."
-        )
         self._sync_user_state("sync global atualizado")
 
     def _sync_user_state(self, reason: str) -> bool:
@@ -1448,8 +1432,21 @@ class MainWindow(QMainWindow):
         self._user_state_dirty = True
         return True
 
-    def _flush_user_state_periodic(self):
-        self._flush_user_state("sincronizacao periodica do launcher", notify=True)
+    def _check_daily_user_state_sync(self):
+        """Envia o estado do launcher ao maximo 1x por dia (ou pelo botao Sync)."""
+        last_synced = str(
+            self.settings.get("user_state_last_synced_at", "") or ""
+        ).strip()
+        if last_synced and self._user_state_dirty is False:
+            try:
+                elapsed = datetime.utcnow() - datetime.fromisoformat(
+                    last_synced.replace("Z", "")
+                )
+                if elapsed.total_seconds() < USER_STATE_SYNC_INTERVAL_S:
+                    return
+            except ValueError:
+                pass
+        self._flush_user_state("sincronizacao diaria do launcher", notify=True)
 
     def _flush_user_state(
         self,
@@ -1477,9 +1474,9 @@ class MainWindow(QMainWindow):
             self,
             "Sobre",
             f"<h2 style='color: #1EA1FF;'>{APP_NAME}</h2>"
-            f"<p>Versao 1.0.0</p>"
-            f"<p>Game Launcher profissional com sincronizacao automatica "
-            f"de saves via GitHub.</p>"
+            f"<p>Versao {APP_VERSION}</p>"
+            f"<p>Game Launcher profissional com sincronizacao de saves "
+            f"via GitHub.</p>"
             f"<p>Desenvolvido com Python + PySide6</p>",
         )
 

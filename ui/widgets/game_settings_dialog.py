@@ -64,7 +64,7 @@ class GameSettingsDialog(QDialog):
         save_row.addWidget(save_btn)
         form.addRow("Pasta de Saves:", save_row)
 
-        self._sync_enabled = QCheckBox("Ativar sync automatico para este jogo")
+        self._sync_enabled = QCheckBox("Ativar sync de saves para este jogo")
         self._sync_enabled.setChecked(sync_enabled)
         form.addRow("", self._sync_enabled)
 
@@ -128,11 +128,11 @@ class GameSettingsDialog(QDialog):
 
         if self._global_sync_enabled:
             self._info_label.setText(
-                "Ao salvar com o sync ativado, o launcher ja pode enviar os saves atuais para o GitHub."
+                "Sincronizacao de saves ativada. Use o botao 'Sincronizar' na biblioteca ou 'Salvar e Sincronizar Agora' para realizar o sincronismo manual."
             )
         else:
             self._info_label.setText(
-                "O sync automatico global esta desligado. Ainda assim, voce pode usar 'Salvar e Sincronizar Agora' para enviar manualmente."
+                "A sincronizacao global de saves esta desligada nas Configuracoes. Voce ainda pode clicar em 'Salvar e Sincronizar Agora' para sincronizar de imediato."
             )
 
     def _finish(self, sync_now: bool):

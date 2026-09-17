@@ -1,26 +1,170 @@
 """
-Gerenciador de sincronizacao com GitHub.
-Clona repositorios, cria commits e faz push de save-games e do estado do launcher.
+Gerenciador de sincronizacao com GitHub via API REST.
+Nao depende de Git instalado: clona, compara, envia e restaura saves
+usando apenas requisicoes HTTP autenticadas por token.
 """
 
+import base64
+import hashlib
 import json
 import os
+import re
 import shutil
-import sys
 import threading
+import time
 from datetime import datetime
-from typing import Optional
+from typing import Any, Optional
 
-from git import GitCommandError, Repo, refresh
-from git.exc import GitCommandNotFound, InvalidGitRepositoryError
+import requests
 
-from core.constants import BASE_DIR, CACHE_DIR, RESOURCE_DIR
+from core.constants import CACHE_DIR
 from utils.helpers import count_files, file_hash, sanitize_filename
 from utils.logger import get_logger
 
 logger = get_logger("SyncManager")
 
 GAMES_DIR = os.path.join(CACHE_DIR, "github_saves")
+
+API_BASE_URL = "https://api.github.com"
+REQUEST_TIMEOUT_S = (15, 300)
+MAX_BLOB_BYTES = 95 * 1024 * 1024  # limite pratico da API de blobs
+EXCLUDED_DIR_NAMES = {".git"}
+
+
+def _git_blob_sha(data: bytes) -> str:
+    """Calcula o sha1 de blob do Git para comparar com a arvore remota."""
+    header = f"blob {len(data)}\0".encode("ascii")
+    return hashlib.sha1(header + data).hexdigest()
+
+
+class _GitHubRepoClient:
+    """Cliente minimo da API REST do GitHub focado em arquivos e commits."""
+
+    def __init__(self, owner: str, repo: str, token: str):
+        self.owner = owner
+        self.repo = repo
+        self.session = requests.Session()
+        self.session.headers.update(
+            {
+                "Authorization": f"Bearer {token}",
+                "Accept": "application/vnd.github+json",
+                "X-GitHub-Api-Version": "2022-11-28",
+                "User-Agent": "NexusLauncher",
+            }
+        )
+
+    def _url(self, path: str) -> str:
+        base = f"{API_BASE_URL}/repos/{self.owner}/{self.repo}"
+        # A API do GitHub rejeita barra final (404), entao o caminho vazio
+        # nao pode deixar slash pendente
+        if not path:
+            return base
+        return f"{base}/{path}"
+
+    def _request(self, method: str, path: str, **kwargs) -> requests.Response:
+        kwargs.setdefault("timeout", REQUEST_TIMEOUT_S)
+        response = self.session.request(method, self._url(path), **kwargs)
+
+        if response.status_code == 403 and response.headers.get(
+            "X-RateLimit-Remaining"
+        ) == "0":
+            raise RuntimeError(
+                "Limite de requisicoes da API do GitHub atingido. Tente mais tarde."
+            )
+        return response
+
+    def get_repo_info(self) -> Optional[dict]:
+        response = self._request("GET", "")
+        if response.status_code == 200:
+            return response.json()
+        if response.status_code == 404:
+            return None
+        response.raise_for_status()
+        return response.json()
+
+    def get_head_commit(self, branch: str) -> Optional[str]:
+        response = self._request("GET", f"git/ref/heads/{branch}")
+        if response.status_code == 200:
+            return response.json()["object"]["sha"]
+        if response.status_code in (404, 409):
+            return None
+        response.raise_for_status()
+        return None
+
+    def get_tree(
+        self, commit_sha: str
+    ) -> tuple[str, dict[str, tuple[str, int]]]:
+        """Retorna (tree_sha, {caminho: (blob_sha, tamanho)}) da arvore completa."""
+        response = self._request("GET", f"git/trees/{commit_sha}", params={"recursive": "1"})
+        response.raise_for_status()
+        payload = response.json()
+        if payload.get("truncated"):
+            raise RuntimeError(
+                "Repositorio grande demais para leitura pela API do GitHub."
+            )
+        entries: dict[str, tuple[str, int]] = {}
+        for item in payload.get("tree", []):
+            if item.get("type") == "blob":
+                entries[item["path"]] = (item["sha"], int(item.get("size", 0)))
+        return payload["sha"], entries
+
+    def get_commit_tree_sha(self, commit_sha: str) -> Optional[str]:
+        """Resolve o SHA da tree raiz de um commit."""
+        response = self._request("GET", f"git/commits/{commit_sha}")
+        if response.status_code != 200:
+            return None
+        return response.json().get("tree", {}).get("sha")
+
+    def get_blob(self, blob_sha: str) -> bytes:
+        response = self._request("GET", f"git/blobs/{blob_sha}")
+        response.raise_for_status()
+        payload = response.json()
+        if payload.get("encoding") == "base64":
+            return base64.b64decode(payload["content"])
+        return payload["content"].encode("utf-8")
+
+    def create_blob(self, data: bytes) -> str:
+        response = self._request(
+            "POST", "git/blobs", json={"content": base64.b64encode(data).decode("ascii"), "encoding": "base64"}
+        )
+        response.raise_for_status()
+        return response.json()["sha"]
+
+    def create_tree(self, entries: list[dict], base_tree: Optional[str]) -> str:
+        body: dict[str, Any] = {"tree": entries}
+        if base_tree:
+            body["base_tree"] = base_tree
+        response = self._request("POST", "git/trees", json=body)
+        response.raise_for_status()
+        return response.json()["sha"]
+
+    def create_commit(
+        self, message: str, tree_sha: str, parents: list[str]
+    ) -> str:
+        response = self._request(
+            "POST", "git/commits", json={"message": message, "tree": tree_sha, "parents": parents}
+        )
+        response.raise_for_status()
+        return response.json()["sha"]
+
+    def update_ref(self, branch: str, commit_sha: str) -> bool:
+        response = self._request(
+            "PATCH",
+            f"git/refs/heads/{branch}",
+            json={"sha": commit_sha, "force": False},
+        )
+        if response.status_code == 200:
+            return True
+        if response.status_code == 422:  # ref moveu enquanto commitavamos
+            return False
+        response.raise_for_status()
+        return False
+
+    def create_ref(self, branch: str, commit_sha: str) -> bool:
+        response = self._request(
+            "POST", "git/refs", json={"ref": f"refs/heads/{branch}", "sha": commit_sha}
+        )
+        return response.status_code == 201
 
 
 class SyncManager:
@@ -31,33 +175,33 @@ class SyncManager:
     def __init__(self, settings, notification_service):
         self.settings = settings
         self.notification = notification_service
-        self._repo: Optional[Repo] = None
+        self._client: Optional[_GitHubRepoClient] = None
         self._repo_path: Optional[str] = None
+        self._branch: str = "main"
         self._initialized = False
-        self._git_runtime_checked = False
-        self._git_executable = ""
         self._lock = threading.RLock()
         os.makedirs(GAMES_DIR, exist_ok=True)
+
+    # ------------------------------------------------------------------
+    # Configuracao e ciclo de vida
+    # ------------------------------------------------------------------
 
     @property
     def repo_path(self) -> str:
         return self._repo_path or ""
 
     def is_configured(self) -> bool:
-        repo_url, _ = self._resolve_repo_config()
+        owner_repo, _ = self._resolve_repo_config()
         token = str(self.settings.get("github_token", "") or "").strip()
-        return bool(repo_url and token)
+        return bool(owner_repo and token)
 
     def initialize(self) -> bool:
-        """Clona ou abre o repositorio configurado."""
+        """Valida o repositorio configurado e prepara o espelho local."""
         with self._lock:
-            if not self._ensure_git_available():
-                return False
-
-            repo_url, repo_name = self._resolve_repo_config()
+            owner_repo, repo_name = self._resolve_repo_config()
             token = str(self.settings.get("github_token", "") or "").strip()
 
-            if not repo_url:
+            if not owner_repo:
                 message = (
                     "URL do repositorio GitHub invalida. "
                     "Use https://github.com/usuario/repo.git ou usuario/repo."
@@ -70,95 +214,174 @@ class SyncManager:
                 logger.warning("GitHub nao configurado")
                 return False
 
-            self._repo_path = os.path.join(GAMES_DIR, repo_name or "saves_repo")
-            auth_url = self._inject_token(repo_url, token)
-
-            if os.path.isdir(os.path.join(self._repo_path, ".git")):
-                try:
-                    self._repo = Repo(self._repo_path)
-                    self._repo.remote("origin").set_url(auth_url)
-                    self._repo.remote("origin").pull()
-                    self._initialized = True
-                    logger.info(f"Repositorio aberto: {self._repo_path}")
-                    return True
-                except (GitCommandError, InvalidGitRepositoryError) as e:
-                    logger.error(f"Erro ao abrir repo existente: {e}")
-                    shutil.rmtree(self._repo_path, ignore_errors=True)
-
+            client = _GitHubRepoClient(owner_repo[0], owner_repo[1], token)
             try:
-                self._repo = Repo.clone_from(auth_url, self._repo_path)
-                self._initialized = True
-                logger.info(f"Repositorio clonado: {self._repo_path}")
-                return True
-            except (GitCommandError, GitCommandNotFound) as e:
-                logger.error(f"Falha ao clonar repositorio: {e}")
-                self.notification.error(f"Erro ao clonar repositorio: {e}")
+                info = client.get_repo_info()
+            except requests.RequestException as e:
+                logger.error(f"Falha ao acessar repositorio: {e}")
+                self.notification.error(f"Erro de conexao com o GitHub: {e}")
                 return False
 
+            if info is None:
+                message = f"Repositorio '{owner_repo[0]}/{owner_repo[1]}' nao encontrado."
+                logger.error(message)
+                self.notification.error(message)
+                return False
+
+            self._client = client
+            self._branch = info.get("default_branch") or "main"
+            self._repo_path = os.path.join(GAMES_DIR, repo_name or "saves_repo")
+            os.makedirs(self._repo_path, exist_ok=True)
+            self._discard_legacy_git_dir()
+            self._initialized = True
+            logger.info(
+                f"Repositorio pronto: {owner_repo[0]}/{owner_repo[1]} (branch {self._branch})"
+            )
+            # Espelha o estado remoto antes de qualquer leitura, como o pull fazia
+            self.refresh_from_remote()
+            return True
+
     def ensure_ready(self) -> bool:
-        if self._initialized and self._repo and self._repo_path:
+        if self._initialized and self._client and self._repo_path:
             return True
         return self.initialize()
 
     def refresh_from_remote(self) -> bool:
+        """Baixa para o espelho local tudo o que mudou no GitHub."""
         with self._lock:
             if not self.ensure_ready():
                 return False
 
             try:
-                if self._repo.is_dirty(untracked_files=True):
-                    logger.warning(
-                        "Repositorio local com alteracoes pendentes; pull remoto ignorado."
-                    )
-                    return True
+                head = self._client.get_head_commit(self._branch)
+                if head:
+                    _, remote_tree = self._client.get_tree(head)
+                else:
+                    remote_tree = {}
 
-                self._repo.remote("origin").pull()
+                remote_paths = set(remote_tree)
+                self._prune_mirror(remote_paths)
+                self._download_missing(remote_tree)
                 return True
-            except GitCommandError as e:
+            except (requests.RequestException, RuntimeError) as e:
                 logger.error(f"Falha ao atualizar repo local a partir do GitHub: {e}")
-                self.notification.error(f"Erro Git: {e}")
+                self.notification.error(f"Erro ao baixar do GitHub: {e}")
                 return False
 
+    def shutdown(self):
+        """Limpeza ao encerrar."""
+        self._initialized = False
+        self._client = None
+
+    # ------------------------------------------------------------------
+    # Sync de saves de jogo
+    # ------------------------------------------------------------------
+
     def sync_game_saves(self, game_id: int, game_name: str, save_folder: str) -> bool:
-        """Espelha saves locais no repo, grava metadado e faz push."""
+        """Compara a pasta local com o GitHub e envia as diferencas em um commit."""
         if not self.ensure_ready():
             return False
 
         try:
-            game_dir_name = self._get_game_repo_folder_name(game_id, game_name)
-            dest_dir = self._get_game_repo_dir(game_id, game_name)
-            os.makedirs(dest_dir, exist_ok=True)
+            game_dir_prefix = self._game_tree_prefix(game_id)
+            head = self._client.get_head_commit(self._branch)
+            if head:
+                _, remote_tree = self._client.get_tree(head)
+            else:
+                remote_tree = {}
 
-            mirrored = self._mirror_directory(
-                save_folder,
-                dest_dir,
-                exclude_names={self.GAME_SYNC_META_FILENAME},
-            )
+            commit_entries: list[dict] = []
+            mirror_updates: dict[str, str] = {}  # tree_path -> arquivo local
+
+            for dirpath, dirnames, filenames in os.walk(save_folder):
+                dirnames[:] = [d for d in dirnames if d not in EXCLUDED_DIR_NAMES]
+                for fname in filenames:
+                    local_path = os.path.join(dirpath, fname)
+                    rel_path = os.path.relpath(local_path, save_folder)
+                    rel_path = rel_path.replace(os.sep, "/")
+                    tree_path = f"{game_dir_prefix}{rel_path}"
+
+                    try:
+                        with open(local_path, "rb") as f:
+                            data = f.read()
+                    except OSError as e:
+                        logger.warning(f"Nao foi possivel ler '{local_path}': {e}")
+                        continue
+
+                    if len(data) > MAX_BLOB_BYTES:
+                        logger.warning(
+                            f"Arquivo '{rel_path}' de '{game_name}' excede o limite "
+                            "da API do GitHub e sera ignorado."
+                        )
+                        continue
+
+                    blob_sha = _git_blob_sha(data)
+                    remote_entry = remote_tree.get(tree_path)
+                    if remote_entry and remote_entry[0] == blob_sha:
+                        continue
+
+                    sha = self._client.create_blob(data)
+                    commit_entries.append(
+                        {"path": tree_path, "mode": "100644", "type": "blob", "sha": sha}
+                    )
+                    mirror_updates[tree_path] = local_path
 
             meta_relative_path = self._get_game_sync_meta_relative_path(
                 game_id, game_name
             )
-            meta_exists = os.path.isfile(
-                os.path.join(self._repo_path, meta_relative_path)
-            )
-            meta_written = False
+            remote_paths = set(remote_tree)
+            prefix_len = len(game_dir_prefix)
+            for tree_path in remote_paths:
+                if not tree_path.startswith(game_dir_prefix):
+                    continue
+                # o meta e sempre reenviado pelo bloco abaixo, nunca deletado
+                if tree_path == meta_relative_path:
+                    continue
+                rel_path = tree_path[prefix_len:]
+                local_path = os.path.join(save_folder, *rel_path.split("/"))
+                if not os.path.isfile(local_path):
+                    commit_entries.append(self._delete_entry(tree_path))
+                    mirror_updates[tree_path] = ""
+
+            meta_exists = meta_relative_path in remote_paths
             synced_at = self._current_sync_timestamp()
 
-            if mirrored or not meta_exists:
-                meta_written = self._write_game_sync_meta(game_id, game_name, synced_at)
+            if commit_entries or not meta_exists:
+                meta_payload = {
+                    "game_id": game_id,
+                    "game_name": game_name,
+                    "synced_at_utc": synced_at,
+                }
+                meta_content = (
+                    json.dumps(meta_payload, indent=2, ensure_ascii=False) + "\n"
+                ).encode("utf-8")
+                meta_sha = self._client.create_blob(meta_content)
+                commit_entries.append(
+                    {
+                        "path": meta_relative_path,
+                        "mode": "100644",
+                        "type": "blob",
+                        "sha": meta_sha,
+                    }
+                )
+                mirror_updates[meta_relative_path] = ""
 
-            if not mirrored and not meta_written:
+            if not commit_entries:
                 logger.debug(f"Nenhuma alteracao detectada para '{game_name}'")
                 return True
 
             timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            commit_paths = [os.path.join("Saves", game_dir_name)]
-            if meta_written:
-                commit_paths.append(meta_relative_path)
-            commit_msg = f"Auto-sync: {game_name} saves ({timestamp})"
-            return self.sync_paths(commit_paths, commit_msg)
-        except GitCommandError as e:
-            logger.error(f"Erro Git ao sincronizar '{game_name}': {e}")
+            commit_message = f"Auto-sync: {game_name} saves ({timestamp})"
+
+            if self._commit_entries(commit_entries, commit_message):
+                self._apply_mirror_updates(mirror_updates, synced_at, game_id, game_name)
+                logger.info(f"Saves de '{game_name}' enviados ao GitHub")
+                return True
+
+            logger.error(f"Falha ao commitar saves de '{game_name}'")
+            return False
+        except (requests.RequestException, RuntimeError) as e:
+            logger.error(f"Erro ao sincronizar '{game_name}': {e}")
             self.notification.error(f"Erro Git: {e}")
             return False
         except Exception as e:
@@ -172,20 +395,9 @@ class SyncManager:
         local_save_folder: str,
         local_last_synced: Optional[datetime | str] = None,
     ) -> dict:
-        """Compara save local e save do repo para detectar restauracao ou conflito."""
+        """Compara save local e save do espelho do repo para detectar restauracao ou conflito."""
         if not self.ensure_ready():
-            return {
-                "local_exists": False,
-                "repo_exists": False,
-                "identical": True,
-                "local_files": 0,
-                "local_size": 0,
-                "repo_files": 0,
-                "repo_size": 0,
-                "repo_synced_at": "",
-                "local_last_synced": "",
-                "can_upload_without_prompt": False,
-            }
+            return self._empty_comparison()
 
         repo_dir = self._get_game_repo_dir(game_id, game_name)
         local_exists = self._directory_has_files(local_save_folder)
@@ -258,85 +470,130 @@ class SyncManager:
             if not self.ensure_ready():
                 return False
 
-            target_dir = os.path.join(
-                self._repo_path or "",
-                "Saves",
-                self._get_game_repo_folder_name(game_id, new_game_name),
-            )
-            current_dir = None
-            legacy_old_dir = self._get_legacy_game_repo_dir(old_game_name)
-            legacy_new_dir = self._get_legacy_game_repo_dir(new_game_name)
+            try:
+                target_prefix = self._game_tree_prefix(game_id)
+                legacy_prefixes = [
+                    f"Saves/{sanitize_filename(old_game_name)}/",
+                    f"Saves/{sanitize_filename(new_game_name)}/",
+                ]
+                legacy_prefixes = [
+                    prefix for prefix in legacy_prefixes if prefix != target_prefix
+                ]
 
-            for candidate in [target_dir, legacy_old_dir, legacy_new_dir]:
-                if os.path.isdir(candidate):
-                    current_dir = candidate
-                    break
+                head = self._client.get_head_commit(self._branch)
+                if head:
+                    _, remote_tree = self._client.get_tree(head)
+                else:
+                    remote_tree = {}
 
-            if not current_dir:
-                return True
+                commit_entries: list[dict] = []
+                for tree_path, (blob_sha, _) in sorted(remote_tree.items()):
+                    matched_prefix = next(
+                        (
+                            prefix
+                            for prefix in legacy_prefixes
+                            if tree_path.startswith(prefix)
+                        ),
+                        None,
+                    )
+                    if matched_prefix is None:
+                        continue
 
-            commit_paths = []
-            if current_dir != target_dir:
-                os.makedirs(os.path.dirname(target_dir), exist_ok=True)
-                shutil.move(current_dir, target_dir)
-                commit_paths.extend(
-                    [
-                        os.path.relpath(target_dir, self._repo_path),
-                        os.path.relpath(current_dir, self._repo_path),
-                    ]
+                    new_path = target_prefix + tree_path[len(matched_prefix):]
+                    if new_path == tree_path:
+                        continue
+                    commit_entries.append(
+                        {"path": new_path, "mode": "100644", "type": "blob", "sha": blob_sha}
+                    )
+                    commit_entries.append(self._delete_entry(tree_path))
+
+                target_meta = self._get_game_sync_meta_relative_path(
+                    game_id, new_game_name
                 )
-            else:
-                commit_paths.append(os.path.relpath(target_dir, self._repo_path))
+                legacy_meta = next(
+                    (
+                        prefix + self.GAME_SYNC_META_FILENAME
+                        for prefix in legacy_prefixes
+                        if prefix + self.GAME_SYNC_META_FILENAME in remote_tree
+                    ),
+                    None,
+                )
+                if target_meta not in remote_tree:
+                    if legacy_meta:
+                        commit_entries.append(
+                            {
+                                "path": target_meta,
+                                "mode": "100644",
+                                "type": "blob",
+                                "sha": remote_tree[legacy_meta][0],
+                            }
+                        )
+                        commit_entries.append(self._delete_entry(legacy_meta))
+                    else:
+                        synced_at = self._current_sync_timestamp()
+                        meta_content = (
+                            json.dumps(
+                                {
+                                    "game_id": game_id,
+                                    "game_name": new_game_name,
+                                    "synced_at_utc": synced_at,
+                                },
+                                indent=2,
+                                ensure_ascii=False,
+                            )
+                            + "\n"
+                        ).encode("utf-8")
+                        meta_sha = self._client.create_blob(meta_content)
+                        commit_entries.append(
+                            {
+                                "path": target_meta,
+                                "mode": "100644",
+                                "type": "blob",
+                                "sha": meta_sha,
+                            }
+                        )
 
-            self._write_game_sync_meta(
-                game_id,
-                new_game_name,
-                self._current_sync_timestamp(),
-            )
-            commit_paths.append(
-                self._get_game_sync_meta_relative_path(game_id, new_game_name)
-            )
+                if not commit_entries:
+                    return True
 
-            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            return self.sync_paths(
-                commit_paths,
-                f"Save mapping atualizado: {new_game_name} ({timestamp})",
-            )
+                timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                if not self._commit_entries(
+                    commit_entries,
+                    f"Save mapping atualizado: {new_game_name} ({timestamp})",
+                ):
+                    return False
+
+                self.refresh_from_remote()
+                return True
+            except (requests.RequestException, RuntimeError) as e:
+                logger.error(f"Erro ao migrar save de '{old_game_name}': {e}")
+                self.notification.error(f"Erro Git: {e}")
+                return False
+
+    # ------------------------------------------------------------------
+    # Arquivos avulsos (snapshot do estado do launcher)
+    # ------------------------------------------------------------------
 
     def get_game_sync_metadata(self, game_id: int, game_name: str) -> Optional[dict]:
-        with self._lock:
-            if not self.ensure_ready():
-                return None
-
-            meta_path = os.path.join(
-                self._repo_path,
-                self._get_game_sync_meta_relative_path(game_id, game_name),
-            )
-            if not os.path.isfile(meta_path):
-                return None
-
-            try:
-                with open(meta_path, "r", encoding="utf-8") as f:
-                    return json.load(f)
-            except (OSError, json.JSONDecodeError) as e:
-                logger.error(f"Falha ao ler metadado de sync de '{game_name}': {e}")
-                return None
+        meta_path = self._get_game_sync_meta_relative_path(game_id, game_name)
+        payload = self._read_repo_file(meta_path)
+        if payload is None:
+            return None
+        try:
+            return json.loads(payload)
+        except json.JSONDecodeError as e:
+            logger.error(f"Falha ao ler metadado de sync de '{game_name}': {e}")
+            return None
 
     def read_json(self, relative_path: str) -> Optional[dict]:
-        with self._lock:
-            if not self.ensure_ready():
-                return None
-
-            target = os.path.join(self._repo_path, relative_path)
-            if not os.path.isfile(target):
-                return None
-
-            try:
-                with open(target, "r", encoding="utf-8") as f:
-                    return json.load(f)
-            except (OSError, json.JSONDecodeError) as e:
-                logger.error(f"Falha ao ler JSON do repo '{relative_path}': {e}")
-                return None
+        payload = self._read_repo_file(relative_path)
+        if payload is None:
+            return None
+        try:
+            return json.loads(payload)
+        except json.JSONDecodeError as e:
+            logger.error(f"Falha ao ler JSON do repo '{relative_path}': {e}")
+            return None
 
     def write_json_and_sync(
         self,
@@ -357,32 +614,79 @@ class SyncManager:
             if not self.ensure_ready():
                 return False
 
-            target = os.path.join(self._repo_path, relative_path)
-            os.makedirs(os.path.dirname(target), exist_ok=True)
-            with open(target, "w", encoding="utf-8") as f:
-                f.write(content)
+            try:
+                head = self._client.get_head_commit(self._branch)
+                if head:
+                    _, remote_tree = self._client.get_tree(head)
+                else:
+                    remote_tree = {}
+                data = content.encode("utf-8")
+                blob_sha = _git_blob_sha(data)
 
-            return self.sync_paths([relative_path], commit_message)
+                remote_entry = remote_tree.get(relative_path)
+                if remote_entry and remote_entry[0] == blob_sha:
+                    return True
+
+                sha = self._client.create_blob(data)
+                entry = {
+                    "path": relative_path,
+                    "mode": "100644",
+                    "type": "blob",
+                    "sha": sha,
+                }
+                if self._commit_entries([entry], commit_message):
+                    self._write_mirror_file(relative_path, content)
+                    return True
+                return False
+            except (requests.RequestException, RuntimeError) as e:
+                logger.error(f"Falha ao gravar '{relative_path}' no GitHub: {e}")
+                self.notification.error(f"Erro Git: {e}")
+                return False
 
     def sync_paths(self, relative_paths: list[str], commit_message: str) -> bool:
+        """Envia para o GitHub o conteudo atual desses arquivos no espelho local."""
         with self._lock:
             if not self.ensure_ready():
                 return False
 
             try:
-                cleaned_paths = [path.replace("\\", "/") for path in relative_paths]
-                self._repo.git.add("-A", "--", *cleaned_paths)
+                head = self._client.get_head_commit(self._branch)
+                if head:
+                    _, remote_tree = self._client.get_tree(head)
+                else:
+                    remote_tree = {}
 
-                status = self._repo.git.status("--porcelain", "--", *cleaned_paths)
-                if not status.strip():
-                    logger.debug("Nenhuma alteracao staged para commit")
+                commit_entries: list[dict] = []
+                for relative_path in relative_paths:
+                    relative_path = relative_path.replace("\\", "/")
+                    mirror_file = os.path.join(self._repo_path, relative_path)
+                    if not os.path.isfile(mirror_file):
+                        if relative_path in remote_tree:
+                            commit_entries.append(self._delete_entry(relative_path))
+                        continue
+
+                    with open(mirror_file, "rb") as f:
+                        data = f.read()
+                    blob_sha = _git_blob_sha(data)
+                    remote_entry = remote_tree.get(relative_path)
+                    if remote_entry and remote_entry[0] == blob_sha:
+                        continue
+                    sha = self._client.create_blob(data)
+                    commit_entries.append(
+                        {
+                            "path": relative_path,
+                            "mode": "100644",
+                            "type": "blob",
+                            "sha": sha,
+                        }
+                    )
+
+                if not commit_entries:
+                    logger.debug("Nenhuma alteracao para commit")
                     return True
 
-                self._repo.index.commit(commit_message)
-                self._repo.remote("origin").push()
-                logger.info(f"Commit enviado ao GitHub: {commit_message}")
-                return True
-            except GitCommandError as e:
+                return self._commit_entries(commit_entries, commit_message)
+            except (requests.RequestException, RuntimeError) as e:
                 logger.error(f"Falha ao sincronizar caminhos {relative_paths}: {e}")
                 self.notification.error(f"Erro Git: {e}")
                 return False
@@ -409,9 +713,173 @@ class SyncManager:
             "size": self._directory_size_without_meta(game_dir),
         }
 
-    def _get_game_repo_folder_name(self, game_id: int, game_name: str) -> str:
-        del game_name
-        return f"game_{game_id}"
+    # ------------------------------------------------------------------
+    # Commit de baixo nivel
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _delete_entry(tree_path: str) -> dict:
+        """Entrada de remocao para a arvore; a API exige mode e type mesmo assim."""
+        return {"path": tree_path, "mode": "100644", "type": "blob", "sha": None}
+
+    def _commit_entries(
+        self,
+        entries: list[dict],
+        message: str,
+    ) -> bool:
+        """Cria tree + commit + atualiza a branch, com retry em corrida."""
+        for _ in range(3):
+            head = self._client.get_head_commit(self._branch)
+            base_tree = None
+            if head:
+                base_tree = self._client.get_commit_tree_sha(head)
+                if not base_tree:
+                    return False
+            tree_sha = self._client.create_tree(entries, base_tree)
+            parents = [head] if head else []
+            commit_sha = self._client.create_commit(message, tree_sha, parents)
+            if self._client.update_ref(self._branch, commit_sha):
+                return True
+            if not head and self._client.create_ref(self._branch, commit_sha):
+                return True
+            time.sleep(0.5)
+        return False
+
+    # ------------------------------------------------------------------
+    # Espelho local do repositorio
+    # ------------------------------------------------------------------
+
+    def _discard_legacy_git_dir(self):
+        """Remove metadados de clones antigos via Git; a API nao os usa."""
+        legacy_git_dir = os.path.join(self._repo_path, ".git")
+        if os.path.isdir(legacy_git_dir):
+            shutil.rmtree(legacy_git_dir, ignore_errors=True)
+            logger.info("Pasta .git de clone legado removida do espelho local")
+
+    def _read_repo_file(self, relative_path: str) -> Optional[str]:
+        """Le um arquivo do repo: primeiro do espelho, depois da API."""
+        if not self.ensure_ready():
+            return None
+
+        mirror_file = os.path.join(self._repo_path, relative_path)
+        if os.path.isfile(mirror_file):
+            try:
+                with open(mirror_file, "r", encoding="utf-8") as f:
+                    return f.read()
+            except OSError as e:
+                logger.error(f"Falha ao ler '{relative_path}' do espelho: {e}")
+
+        with self._lock:
+            try:
+                head = self._client.get_head_commit(self._branch)
+                if not head:
+                    return None
+                _, remote_tree = self._client.get_tree(head)
+                entry = remote_tree.get(relative_path)
+                if not entry:
+                    return None
+                data = self._client.get_blob(entry[0])
+                content = data.decode("utf-8")
+                self._write_mirror_file(relative_path, content)
+                return content
+            except (requests.RequestException, RuntimeError) as e:
+                logger.error(f"Falha ao baixar '{relative_path}': {e}")
+                return None
+
+    def _prune_mirror(self, remote_paths: set[str]):
+        """Remove do espelho tudo que nao existe mais no repositorio remoto."""
+        for dirpath, dirnames, filenames in os.walk(self._repo_path, topdown=True):
+            dirnames[:] = [d for d in dirnames if d not in EXCLUDED_DIR_NAMES]
+            for fname in filenames:
+                full_path = os.path.join(dirpath, fname)
+                rel_path = os.path.relpath(full_path, self._repo_path).replace(
+                    os.sep, "/"
+                )
+                if rel_path not in remote_paths:
+                    try:
+                        os.remove(full_path)
+                    except OSError:
+                        pass
+
+            for dirname in list(dirnames):
+                subdir = os.path.join(dirpath, dirname)
+                rel_dir = os.path.relpath(subdir, self._repo_path).replace(os.sep, "/")
+                if not any(path.startswith(rel_dir + "/") for path in remote_paths):
+                    shutil.rmtree(subdir, ignore_errors=True)
+                    dirnames.remove(dirname)
+
+    def _download_missing(self, remote_tree: dict[str, tuple[str, int]]):
+        """Baixa arquivos remotos ausentes ou diferentes no espelho."""
+        for tree_path, (blob_sha, _) in remote_tree.items():
+            mirror_file = os.path.join(self._repo_path, *tree_path.split("/"))
+            if os.path.isfile(mirror_file):
+                try:
+                    with open(mirror_file, "rb") as f:
+                        if _git_blob_sha(f.read()) == blob_sha:
+                            continue
+                except OSError:
+                    pass
+
+            data = self._client.get_blob(blob_sha)
+            os.makedirs(os.path.dirname(mirror_file), exist_ok=True)
+            with open(mirror_file, "wb") as f:
+                f.write(data)
+
+    def _apply_mirror_updates(
+        self,
+        mirror_updates: dict[str, str],
+        synced_at: str,
+        game_id: int,
+        game_name: str,
+    ):
+        """Reflete no espelho local o que foi enviado ao GitHub."""
+        for tree_path, source_path in mirror_updates.items():
+            mirror_file = os.path.join(self._repo_path, *tree_path.split("/"))
+            if not source_path:
+                if os.path.isfile(mirror_file):
+                    try:
+                        os.remove(mirror_file)
+                    except OSError:
+                        pass
+                continue
+            try:
+                os.makedirs(os.path.dirname(mirror_file), exist_ok=True)
+                shutil.copy2(source_path, mirror_file)
+            except OSError as e:
+                logger.warning(f"Falha ao atualizar espelho '{tree_path}': {e}")
+
+        meta_relative_path = self._get_game_sync_meta_relative_path(
+            game_id, game_name
+        )
+        self._write_mirror_file(
+            meta_relative_path,
+            json.dumps(
+                {
+                    "game_id": game_id,
+                    "game_name": game_name,
+                    "synced_at_utc": synced_at,
+                },
+                indent=2,
+                ensure_ascii=False,
+            )
+            + "\n",
+        )
+
+    def _write_mirror_file(self, relative_path: str, content: str):
+        target = os.path.join(self._repo_path, *relative_path.split("/"))
+        try:
+            os.makedirs(os.path.dirname(target), exist_ok=True)
+            with open(target, "w", encoding="utf-8") as f:
+                f.write(content)
+        except OSError as e:
+            logger.warning(f"Falha ao gravar espelho '{relative_path}': {e}")
+
+    # ------------------------------------------------------------------
+    # Helpers de caminho e manifesto
+    # ------------------------------------------------------------------
+
+    def _game_tree_prefix(self, game_id: int) -> str:
+        return f"Saves/game_{game_id}/"
 
     def _get_legacy_game_repo_dir(self, game_name: str) -> str:
         return os.path.join(
@@ -420,9 +888,7 @@ class SyncManager:
 
     def _get_game_repo_dir(self, game_id: int, game_name: str) -> str:
         target_dir = os.path.join(
-            self._repo_path or "",
-            "Saves",
-            self._get_game_repo_folder_name(game_id, game_name),
+            self._repo_path or "", "Saves", f"game_{game_id}"
         )
         legacy_dir = self._get_legacy_game_repo_dir(game_name)
         if (
@@ -435,29 +901,7 @@ class SyncManager:
         return target_dir
 
     def _get_game_sync_meta_relative_path(self, game_id: int, game_name: str) -> str:
-        return os.path.join(
-            "Saves",
-            self._get_game_repo_folder_name(game_id, game_name),
-            self.GAME_SYNC_META_FILENAME,
-        )
-
-    def _write_game_sync_meta(
-        self, game_id: int, game_name: str, synced_at: str
-    ) -> bool:
-        meta_path = os.path.join(
-            self._repo_path,
-            self._get_game_sync_meta_relative_path(game_id, game_name),
-        )
-        payload = {
-            "game_id": game_id,
-            "game_name": game_name,
-            "synced_at_utc": synced_at,
-        }
-        os.makedirs(os.path.dirname(meta_path), exist_ok=True)
-        with open(meta_path, "w", encoding="utf-8") as f:
-            json.dump(payload, f, indent=2, ensure_ascii=False)
-            f.write("\n")
-        return True
+        return f"Saves/game_{game_id}/{self.GAME_SYNC_META_FILENAME}"
 
     def _mirror_directory(
         self,
@@ -521,7 +965,8 @@ class SyncManager:
         if not os.path.isdir(path):
             return manifest
 
-        for dirpath, _, filenames in os.walk(path):
+        for dirpath, dirnames, filenames in os.walk(path):
+            dirnames[:] = [d for d in dirnames if d not in EXCLUDED_DIR_NAMES]
             for fname in sorted(filenames):
                 if fname in exclude_names:
                     continue
@@ -544,7 +989,8 @@ class SyncManager:
         if not os.path.isdir(path):
             return False
 
-        for _, _, filenames in os.walk(path):
+        for dirpath, dirnames, filenames in os.walk(path):
+            dirnames[:] = [d for d in dirnames if d not in EXCLUDED_DIR_NAMES]
             for fname in filenames:
                 if fname not in exclude_names:
                     return True
@@ -569,14 +1015,26 @@ class SyncManager:
             return True
         return file_hash(src_file) != file_hash(dst_file)
 
-    def _inject_token(self, url: str, token: str) -> str:
-        """Insere token de autenticacao na URL do GitHub."""
-        if url.startswith("https://"):
-            return url.replace("https://", f"https://x-access-token:{token}@")
-        return url
+    def _empty_comparison(self) -> dict:
+        return {
+            "local_exists": False,
+            "repo_exists": False,
+            "identical": True,
+            "local_files": 0,
+            "local_size": 0,
+            "repo_files": 0,
+            "repo_size": 0,
+            "repo_synced_at": "",
+            "local_last_synced": "",
+            "can_upload_without_prompt": False,
+        }
 
-    def _resolve_repo_config(self) -> tuple[str, str]:
-        """Normaliza URL remota e nome da pasta local do repo."""
+    # ------------------------------------------------------------------
+    # Config do repositorio
+    # ------------------------------------------------------------------
+
+    def _resolve_repo_config(self) -> tuple[Optional[tuple[str, str]], str]:
+        """Normaliza URL remota para (owner, repo) e nome da pasta local."""
         repo_url = str(self.settings.get("github_repo_url", "") or "").strip()
         repo_name = str(self.settings.get("github_repo_name", "") or "").strip()
 
@@ -585,12 +1043,13 @@ class SyncManager:
         ):
             repo_url, repo_name = repo_name, repo_url
 
-        repo_url = self._normalize_repo_url(repo_url)
+        normalized_url = self._normalize_repo_url(repo_url)
 
         if not repo_name or self._looks_like_repo_url(repo_name):
             repo_name = self._extract_repo_name(repo_name or repo_url)
 
-        return repo_url, sanitize_filename(repo_name or "saves_repo")
+        owner_repo = self._extract_owner_repo(normalized_url)
+        return owner_repo, sanitize_filename(repo_name or "saves_repo")
 
     @staticmethod
     def _looks_like_repo_url(value: str) -> bool:
@@ -627,6 +1086,16 @@ class SyncManager:
         return ""
 
     @staticmethod
+    def _extract_owner_repo(url: str) -> Optional[tuple[str, str]]:
+        url = (url or "").strip().rstrip("/")
+        url = re.sub(r"^https?://(www\.)?github\.com/", "", url, flags=re.IGNORECASE)
+        url = url.removesuffix(".git")
+        parts = [part for part in url.split("/") if part]
+        if len(parts) >= 2 and parts[0] and parts[1]:
+            return parts[0], parts[1]
+        return None
+
+    @staticmethod
     def _extract_repo_name(value: str) -> str:
         value = (value or "").strip().rstrip("/")
         if not value:
@@ -646,64 +1115,3 @@ class SyncManager:
     @staticmethod
     def _current_sync_timestamp() -> str:
         return datetime.utcnow().replace(microsecond=0).isoformat() + "Z"
-
-    def shutdown(self):
-        """Limpeza ao encerrar."""
-        self._initialized = False
-        self._repo = None
-
-    def _ensure_git_available(self) -> bool:
-        if self._git_runtime_checked and self._git_executable:
-            return True
-
-        bundled_git = self._find_bundled_git_executable()
-        if bundled_git:
-            try:
-                refresh(bundled_git)
-                self._git_executable = bundled_git
-                self._git_runtime_checked = True
-                logger.info(f"Git embutido detectado: {bundled_git}")
-                return True
-            except (GitCommandNotFound, OSError) as e:
-                logger.warning(f"Falha ao ativar Git embutido '{bundled_git}': {e}")
-
-        try:
-            refresh()
-            self._git_executable = "git"
-            self._git_runtime_checked = True
-            logger.info("Git do sistema detectado")
-            return True
-        except GitCommandNotFound:
-            self._git_executable = ""
-            self._git_runtime_checked = False
-            logger.error("Nenhum executavel Git disponivel")
-            self.notification.error(
-                "Git nao encontrado. Para producao, empacote o PortableGit junto do launcher "
-                "ou instale o Git no Windows."
-            )
-            return False
-
-    def _find_bundled_git_executable(self) -> str:
-        runtime_roots = []
-
-        if getattr(sys, "frozen", False):
-            runtime_roots.append(os.path.dirname(os.path.abspath(sys.executable)))
-
-        for root in [RESOURCE_DIR, BASE_DIR]:
-            if root and root not in runtime_roots:
-                runtime_roots.append(root)
-
-        relative_candidates = [
-            os.path.join("vendor", "PortableGit", "cmd", "git.exe"),
-            os.path.join("vendor", "PortableGit", "bin", "git.exe"),
-            os.path.join("PortableGit", "cmd", "git.exe"),
-            os.path.join("PortableGit", "bin", "git.exe"),
-        ]
-
-        for root in runtime_roots:
-            for relative_path in relative_candidates:
-                candidate = os.path.join(root, relative_path)
-                if os.path.isfile(candidate):
-                    return candidate
-
-        return ""
